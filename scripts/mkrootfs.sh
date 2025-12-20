@@ -87,7 +87,9 @@ EOF
 }
 
 install_pkgs(){
-    chroot ${ROOTFS} apk add openrc openrc-bash-completion openrc-init
+    chroot ${ROOTFS} apk add openrc openrc-bash-completion \
+                             openrc-init busybox-openrc busybox-mdev-openrc \
+                             busybox-suid openssh-server-common-openrc
 }
 
 default_param

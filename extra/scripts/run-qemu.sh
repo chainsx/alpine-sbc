@@ -1,5 +1,5 @@
 
-sudo qemu-system-arm64    -machine virt -cpu cortex-a76 -m size=1G        -bios  ./u-boot.bin
+sudo qemu-system-aarch64 -machine virt -cpu cortex-a72 -nographic -smp 8,cores=8,threads=1,sockets=1 -m 2G -bios u-boot.bin -drive file=alpine-aarch64-alpha1.img,format=raw,id=hd0 -object rng-random,filename=/dev/urandom,id=rng0 -device virtio-rng-device,rng=rng0 -device virtio-net-device,netdev=usernet -netdev user,id=usernet -device qemu-xhci -usb -device usb-kbd -device usb-tablet
 
 
 qemu-system-riscv64 -machine virt -nographic \

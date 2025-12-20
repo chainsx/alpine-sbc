@@ -25,9 +25,8 @@ default_param() {
     board=extlinux-arm64
     platform=generic-arm64
     boot_size=128
-    nonfree_bin_dir=${src_dir}/bin
     rootfs_dir=${work_dir}/rootfs
-    boot_dir=${work_dir}/kernel-bin/boot
+    boot_dir=${work_dir}/rootfs/boot
     uboot_dir=${work_dir}/u-boot
     boot_mnt=${work_dir}/boot_tmp
     root_mnt=${work_dir}/root_tmp
@@ -90,12 +89,6 @@ LOSETUP_D_IMG(){
     if [ -d ${boot_mnt} ]; then
         rm -rf ${boot_mnt}
     fi
-    if [ -d ${rootfs_dir} ]; then
-        rm -rf ${rootfs_dir}
-    fi
-    if [ -d ${boot_dir} ]; then
-        rm -rf ${boot_dir}
-    fi
     set -e
 }
 
@@ -111,10 +104,10 @@ LOG(){
 }
 
 make_img(){
-    if [[ -d ${work_dir}/kernel-bin ]];then
-        LOG "kernel-bin dir check done."
+    if [[ -d ${work_dir}/kernel-pkg ]];then
+        LOG "kernel-pkg dir check done."
     else
-        ERROR "kernel-bin dir check failed, please re-run mklinux.sh."
+        ERROR "kernel-pkg dir check failed, please re-run mklinux.sh."
         exit 2
     fi
     if [[ -d ${work_dir}/rootfs ]];then
@@ -127,7 +120,7 @@ make_img(){
     device=""
     LOSETUP_D_IMG
     root_size=`du -sh --block-size=1MiB ${work_dir}/rootfs | cut -f 1 | xargs`
-    kernel_size=`du -sh --block-size=1MiB ${work_dir}/kernel-bin | cut -f 1 | xargs`
+    kernel_size=`du -sh --block-size=1MiB ${work_dir}/kernel-pkg | cut -f 1 | xargs`
     size=$((${root_size}+${boot_size}+${kernel_size}+880))
     losetup -D
     img_file=${work_dir}/${name}.img
@@ -139,7 +132,8 @@ make_img(){
     section1_start=32768
     section1_end=$((${section1_start}+(${boot_size}*2048)-1))
 
-    parted ${img_file} mklabel ${part_table} mkpart primary fat32 ${section1_start}s ${section1_end}s
+    parted ${img_file} mklabel ${part_table}
+    parted ${img_file} mkpart primary fat32 ${section1_start}s ${section1_end}s
     parted ${img_file} -s set 1 boot on
     parted ${img_file} mkpart primary ext4 $(($section1_end+1))s 100%
     
@@ -162,41 +156,50 @@ make_img(){
     mkfs.ext4 -L rootfs ${rootp}
     LOG "make filesystems done."
     mkdir -p ${root_mnt} ${boot_mnt}
-    mount -t vfat -o uid=root,gid=root,umask=0000 ${bootp} ${boot_mnt}
+    mount -t vfat ${bootp} ${boot_mnt}
     mount -t ext4 ${rootp} ${root_mnt}
 
     rootfs_dir=${work_dir}/rootfs
-    boot_dir=${work_dir}/kernel-bin/boot
+    boot_dir=${work_dir}/rootfs/boot
     
     rsync -avHAXq ${rootfs_dir}/* ${root_mnt}
-    rsync -avHAXq ${work_dir}/kernel-bin/lib/modules/* ${root_mnt}/lib/modules
     sync
     sleep 10
     LOG "copy root done."
+
+    cp ${work_dir}/*apk ${root_mnt}/kernel.apk
+    chroot ${root_mnt} apk add --allow-untrusted /kernel.apk
+    rm ${root_mnt}/kernel.apk
     
-    cp -rfp ${boot_dir}/* ${boot_mnt} || LOG "${boot_dir} is empty."
-    
-    if [ ! -d ${boot_mnt}/extlinux ];then
-        mkdir ${boot_mnt}/extlinux
+    chroot ${root_mnt} apk add dracut
+    chroot ${root_mnt} dracut --no-kernel
+    cp ${root_mnt}/boot/initramfs* ${root_mnt}/boot/initrd.img
+
+    if [ ! -d ${root_mnt}/boot/extlinux ];then
+        mkdir ${root_mnt}/boot/extlinux
     fi
 
     line=$(blkid | grep $rootp)
     uuid=${line#*UUID=\"}
     uuid=${uuid%%\"*}
+
+    echo "label Alpine
+        kernel /Image
+        initrd /initrd.img" \
+        > ${root_mnt}/boot/extlinux/extlinux.conf
+
+    if [ -z ${dtb_name} ];then
+        echo "        fdt /${dtb_name}.dtb" >> ${root_mnt}/boot/extlinux/extlinux.conf
+    fi
     
-    sed -i "s|UUID=614e0000-0000-4b53-8000-1d28000054a9|UUID=${uuid}|g" ${boot_mnt}/extlinux/extlinux.conf
+    echo "        append  ${bootargs}" >> ${root_mnt}/boot/extlinux/extlinux.conf
 
-
-    if [ -d ${work_dir}/kernel/kernel-modules/lib/modules ]; then
-        if [ -d ${root_mnt}/lib/modules ];then rm -rf ${root_mnt}/lib/modules; fi
-        cp -rfp ${work_dir}/kernel/kernel-modules/lib/modules ${root_mnt}/lib
-        LOG "install kernel modules done."
+    if [ -n ${boot_size} ];then
+        mv ${root_mnt}/boot/* ${boot_mnt} || LOG "${root_mnt}/boot is empty."
     fi
 
     umount $rootp
     umount $bootp
-    umount ${rootfs_dir}
-    umount ${boot_dir}
     
     INSTALL_U_BOOT
     
@@ -230,7 +233,7 @@ outputd(){
 }
 
 set -e
-src_dir=$(cd $(dirname $0);pwd)
+src_dir=$(pwd)
 default_param
 parseargs "$@" || help $?
 
@@ -242,6 +245,10 @@ source ${src_dir}/boards/${board}.config
 source ${src_dir}/scripts/libs/bootloader-install.sh
 
 if [ ! -d ${log_dir} ];then mkdir -p ${log_dir}; fi
+
+INSTALL_U_BOOT() {
+    echo "init"
+}
 
 LOG "gen image..."
 make_img

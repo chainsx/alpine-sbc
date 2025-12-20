@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# 设置遇到错误立即退出
 set -e
 
 __usage="
@@ -23,7 +22,6 @@ help()
     exit $1
 }
 
-# --- Log Helpers ---
 log_info() { echo -e "\033[32m[INFO] $1\033[0m"; }
 log_warn() { echo -e "\033[33m[WARN] $1\033[0m"; }
 log_err() { echo -e "\033[31m[ERR] $1\033[0m"; }
@@ -34,9 +32,8 @@ default_param() {
     kernel_branch="v6.12.60"
     kernel_config="" 
     
-    # Working directories
     work_dir="$(pwd)/build"
-    out_dir="${work_dir}/kernel-bin"
+    out_dir="${work_dir}/kernel-pkg/kernel-bin"
     kernel_dir="${work_dir}/linux-src"
 }
 
@@ -77,7 +74,6 @@ parseargs()
 }
 
 check_env() {
-    # Check dependencies
     for cmd in git make gcc openssl tar; do
         if ! command -v $cmd &> /dev/null; then
             log_err "Missing dependency: $cmd"
@@ -85,7 +81,6 @@ check_env() {
         fi
     done
 
-    # Determine Cross Compiler Prefix
     host_arch=$(uname -m)
     
     case $host_arch in
@@ -153,12 +148,11 @@ output_kernel() {
 
     log_info "Installing kernel image..."
     make ARCH=${kernel_arch} CROSS_COMPILE=${cross_compile} INSTALL_PATH="${out_dir}/boot" install
+    cp arch/${kernel_arch}/boot/Image ${out_dir}/boot
     
     log_info "Installing kernel devicetrees..."
     make ARCH=${kernel_arch} CROSS_COMPILE=${cross_compile} INSTALL_PATH="${out_dir}/boot" dtbs_install
 }
-
-# --- Main Execution ---
 
 default_param
 parseargs "$@" || help $?
