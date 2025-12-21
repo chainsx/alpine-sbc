@@ -89,7 +89,65 @@ EOF
 install_pkgs(){
     chroot ${ROOTFS} apk add openrc openrc-bash-completion \
                              openrc-init busybox-openrc busybox-mdev-openrc \
-                             busybox-suid openssh-server-common-openrc
+                             busybox-suid openssh-server-common-openrc \
+                             util-linux btop bash-completion openssh tzdata dhcpcd mdev-conf
+}
+
+config_rootfs(){
+    chroot ${ROOTFS} rc-update add devfs sysinit
+    chroot ${ROOTFS} rc-update add procfs sysinit
+    chroot ${ROOTFS} rc-update add sysfs sysinit
+
+    chroot ${ROOTFS} rc-update add mdev sysinit
+
+    sed -i '/tty1/d' ${ROOTFS}/etc/inittab
+    sed -i '/tty2/d' ${ROOTFS}/etc/inittab
+    sed -i '/tty3/d' ${ROOTFS}/etc/inittab
+    sed -i '/tty4/d' ${ROOTFS}/etc/inittab
+    sed -i '/tty5/d' ${ROOTFS}/etc/inittab
+    sed -i '/tty6/d' ${ROOTFS}/etc/inittab
+
+    echo "Configuring Network..."
+    mkdir -p ${ROOTFS}/etc/network
+    cat > ${ROOTFS}/etc/network/interfaces <<EOF
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+
+auto eth1
+iface eth1 inet dhcp
+EOF
+    chroot ${ROOTFS} rc-update add networking boot
+    chroot ${ROOTFS} rc-update add modules boot
+
+    mkdir -p ${ROOTFS}/etc/local.d
+    cat > ${ROOTFS}/etc/local.d/load_modules.start << 'EOF'
+#!/bin/sh
+echo "Scanning hardware drivers..."
+mdev -s
+find /sys -name modalias -type f -exec cat '{}' + | sort -u | xargs -n1 modprobe -b -q 2>/dev/null
+EOF
+    chmod +x ${ROOTFS}/etc/local.d/load_modules.start
+    chroot ${ROOTFS} rc-update add local default
+
+    echo "alpine" > ${ROOTFS}/etc/hostname
+
+    sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' ${ROOTFS}/etc/ssh/sshd_config
+    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' ${ROOTFS}/etc/ssh/sshd_config
+    chroot ${ROOTFS} rc-update add sshd default
+
+    cp ${ROOTFS}/usr/share/zoneinfo/Asia/Shanghai ${ROOTFS}/etc/localtime
+    echo "Asia/Shanghai" > ${ROOTFS}/etc/timezone
+
+    sed -i 's/\/bin\/ash/\/bin\/bash/g' ${ROOTFS}/etc/passwd
+
+    chroot ${ROOTFS} echo "root:alpine" | chpasswd
+
+    chroot ${ROOTFS} depmod -a
+
+    rm -rf ${ROOTFS}/var/cache/apk/*
 }
 
 default_param
@@ -98,4 +156,4 @@ parseargs "$@" || help $?
 get_minirootfs
 init_rootfs
 install_pkgs
-
+config_rootfs
