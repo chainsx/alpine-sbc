@@ -131,6 +131,8 @@ patch_kernel(){
     else
         log_info "No files directory found. Skipping patching."
     fi
+
+    touch .patched
 }
 
 compile_kernel(){
@@ -179,6 +181,10 @@ parseargs "$@" || help $?
 
 check_env
 fetch_kernel
-patch_kernel
+
+if [ ! -f ${kernel_dir}/.patched ];then
+    patch_kernel
+fi
+
 compile_kernel
 output_kernel

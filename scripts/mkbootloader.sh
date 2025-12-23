@@ -123,20 +123,17 @@ patch_u-boot() {
     else
         log_info "No files directory found. Skipping patching."
     fi
+
+    touch .patched
     
     popd
 }
 
 compile_u-boot() {
     pushd ${work_dir}/u-boot
-    if [[ -f ${work_dir}/u-boot/u-boot.bin ]];then
-        LOG "u-boot is the latest"
-    else
-        make ${bootloader_config}
-        make -j$(nproc)
-        make ${uboot_extra_config} -j$(nproc)
-        LOG "make u-boot done."
-    fi
+    make ${bootloader_config}
+    make ${uboot_extra_config} -j$(nproc)
+    LOG "make u-boot done."
     popd
 
 }
@@ -167,7 +164,7 @@ if [[ ${atf_compile} == "no" && ${rkbin} == "yes" ]];then
     source ${src_dir}/scripts/libs/rkbin-version.sh
     fetch_rkbin
 
-    uboot_extra_config="ROCKCHIP_TPL=${work_dir}/rkbin/bin/${tpl_bin} BL31=${work_dir}/rkbin/bin/${atf_bin}"
+    uboot_extra_config="ROCKCHIP_TPL=${work_dir}/rkbin/${tpl_bin} BL31=${work_dir}/rkbin/${atf_bin}"
 fi
 
 if [[ ${atf_compile} == "yes" ]];then
@@ -181,8 +178,8 @@ LOG "build u-boot..."
 
 fetch_u-boot
 
-if [ ! -n ${uboot_extra_config} ];then
-    uboot_extra_config=""
+if [ ! -f ${work_dir}/u-boot/.patched ];then
+    patch_u-boot
 fi
 
 compile_u-boot

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-if [ ! -z ${soc} ];then
+if [ -z ${soc} ];then
     exit 2
 fi
 
@@ -58,11 +58,15 @@ case "$soc" in
 esac
 
 fetch_rkbin(){
-    git clone https://github.com/rockchip-linux/rkbin.git ${work_dir}/rkbin
-    
-    pushd ${work_dir}/rkbin
-    git checkout ${RKBIN_SOURCE_VERSION}
-    popd
+    if [ ! -d ${work_dir}/rkbin ];then
+        git clone https://github.com/rockchip-linux/rkbin.git ${work_dir}/rkbin
+
+        pushd ${work_dir}/rkbin
+        git checkout ${RKBIN_SOURCE_VERSION}
+        popd
+    else
+        echo "rkbin source found, skip clone."
+    fi
 }
 
 #fetch_rkbin
