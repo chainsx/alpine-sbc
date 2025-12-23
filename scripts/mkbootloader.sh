@@ -17,6 +17,10 @@ help()
     exit $1
 }
 
+log_info() { echo -e "\033[32m[INFO] $1\033[0m"; }
+log_warn() { echo -e "\033[33m[WARN] $1\033[0m"; }
+log_err() { echo -e "\033[31m[ERR] $1\033[0m"; }
+
 default_param() {
     work_dir="$(pwd)/build"
     bootloader_url="https://github.com/u-boot/u-boot.git"
@@ -83,6 +87,46 @@ fetch_u-boot() {
     popd
 }
 
+patch_u-boot() {
+    pushd ${work_dir}/u-boot
+
+    if [ -d "${work_dir}/../patches/u-boot/${bootloader_branch}/generic/patches" ]; then
+        log_info "Applying patches..."
+        for patch in ${work_dir}/../patches/u-boot/${bootloader_branch}/generic/patches/*.patch; do
+            log_info "Applying patch: $(basename $patch)"
+            git apply "$patch"
+        done
+    else
+        log_info "No patches directory found. Skipping patching."
+    fi
+
+    if [ -d "${work_dir}/../patches/u-boot/${bootloader_branch}/generic/files" ]; then
+        log_info "Applying files..."
+        cp -r ${work_dir}/../patches/u-boot/${bootloader_branch}/generic/files/* .
+    else
+        log_info "No files directory found. Skipping patching."
+    fi
+
+    if [ -d "${work_dir}/../patches/u-boot/${bootloader_branch}/${board}/patches" ]; then
+        log_info "Applying patches..."
+        for patch in ${work_dir}/../patches/u-boot/${bootloader_branch}/${board}/patches/*.patch; do
+            log_info "Applying patch: $(basename $patch)"
+            git apply "$patch"
+        done
+    else
+        log_info "No patches directory found. Skipping patching."
+    fi
+
+    if [ -d "${work_dir}/../patches/u-boot/${bootloader_branch}/${board}/files" ]; then
+        log_info "Applying files..."
+        cp -r ${work_dir}/../patches/u-boot/${bootloader_branch}/${board}/files/* .
+    else
+        log_info "No files directory found. Skipping patching."
+    fi
+    
+    popd
+}
+
 compile_u-boot() {
     pushd ${work_dir}/u-boot
     if [[ -f ${work_dir}/u-boot/u-boot.bin ]];then
@@ -119,14 +163,11 @@ else
     LOG "You are running this script on a ${host_arch} mechine, progress...."
 fi
 
-if [ ! -z ${uboot_extra_config} ];then
-    uboot_extra_config=""
-fi
-
 if [[ ${atf_compile} == "no" && ${rkbin} == "yes" ]];then
     source ${src_dir}/scripts/libs/rkbin-version.sh
-    
     fetch_rkbin
+
+    uboot_extra_config="ROCKCHIP_TPL=${work_dir}/rkbin/bin/${tpl_bin} BL31=${work_dir}/rkbin/bin/${atf_bin} \"
 fi
 
 if [[ ${atf_compile} == "yes" ]];then
@@ -139,4 +180,9 @@ fi
 LOG "build u-boot..."
 
 fetch_u-boot
+
+if [ ! -n ${uboot_extra_config} ];then
+    uboot_extra_config=""
+fi
+
 compile_u-boot

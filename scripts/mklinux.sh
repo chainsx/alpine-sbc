@@ -113,6 +113,26 @@ fetch_kernel(){
     fi
 }
 
+patch_kernel(){
+    cd "${kernel_dir}"
+    if [ -d "${work_dir}/../patches/kernel/${kernel_branch}/patches" ]; then
+        log_info "Applying patches..."
+        for patch in ${work_dir}/../patches/kernel/${kernel_branch}/patches/*.patch; do
+            log_info "Applying patch: $(basename $patch)"
+            git apply "$patch"
+        done
+    else
+        log_info "No patches directory found. Skipping patching."
+    fi
+
+    if [ -d "${work_dir}/../patches/kernel/${kernel_branch}/files" ]; then
+        log_info "Applying files..."
+        cp -r ${work_dir}/../patches/kernel/${kernel_branch}/files/* .
+    else
+        log_info "No files directory found. Skipping patching."
+    fi
+}
+
 compile_kernel(){
     cd "${kernel_dir}"
     
@@ -159,5 +179,6 @@ parseargs "$@" || help $?
 
 check_env
 fetch_kernel
+patch_kernel
 compile_kernel
 output_kernel

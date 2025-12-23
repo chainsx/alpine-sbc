@@ -20,7 +20,7 @@ help()
 
 default_param() {
     work_dir=$src_dir/build
-    outputdir=${work_dir}/$(date +'%Y-%m-%d')
+    outputdir=${work_dir}/output
     name=alpine-aarch64-alpha1
     board=extlinux-arm64
     platform=generic-arm64
@@ -103,6 +103,26 @@ LOG(){
     echo `date` - INFO, $* | tee -a ${log_dir}/${builddate}.log
 }
 
+gen_bootmode(){
+    if [ ${boot_mode} == "extlinux" ];then
+        echo "label Alpine
+        kernel /Image
+        initrd /initrd.img" \
+        > ${root_mnt}/boot/extlinux/extlinux.conf
+
+        if [ -z ${dtb_name} ];then
+            echo "        fdt /${dtb_name}.dtb" >> ${root_mnt}/boot/extlinux/extlinux.conf
+        fi
+    
+        echo "        append  ${bootargs}" >> ${root_mnt}/boot/extlinux/extlinux.conf
+    elif [ ${boot_mode} == "grub" ];then
+        echo "TODO"
+    else
+        ERROR "Unknown boot mode: ${boot_mode}"
+        exit 2
+    fi
+}
+
 make_img(){
     if [[ -d ${work_dir}/kernel-pkg ]];then
         LOG "kernel-pkg dir check done."
@@ -183,16 +203,7 @@ make_img(){
     uuid=${line#*UUID=\"}
     uuid=${uuid%%\"*}
 
-    echo "label Alpine
-        kernel /Image
-        initrd /initrd.img" \
-        > ${root_mnt}/boot/extlinux/extlinux.conf
-
-    if [ -z ${dtb_name} ];then
-        echo "        fdt /${dtb_name}.dtb" >> ${root_mnt}/boot/extlinux/extlinux.conf
-    fi
-    
-    echo "        append  ${bootargs}" >> ${root_mnt}/boot/extlinux/extlinux.conf
+    gen_bootmode
 
     if [ -n ${boot_size} ];then
         mv ${root_mnt}/boot/* ${boot_mnt} || LOG "${root_mnt}/boot is empty."
@@ -245,10 +256,6 @@ source ${src_dir}/boards/${board}.config
 source ${src_dir}/scripts/libs/bootloader-install.sh
 
 if [ ! -d ${log_dir} ];then mkdir -p ${log_dir}; fi
-
-INSTALL_U_BOOT() {
-    echo "init"
-}
 
 LOG "gen image..."
 make_img

@@ -2,7 +2,7 @@
 
 INSTALL_U_BOOT(){
 
-    if [ "${platform}" == "rockchip" ];then
+    if [ "${platform}" == "rockchip64" ];then
         echo "Installing Rockchip U-Boot..."
 
         if [ -f ${uboot_dir}/idbloader.img ]; then
@@ -37,7 +37,7 @@ INSTALL_U_BOOT(){
             ERROR "allwinner u-boot file can not be found!"
             exit 2
         fi
-    elif [ "${platform}" != "broadcom" ];then
+    else
         echo "Unsupported platform"
     fi
 }

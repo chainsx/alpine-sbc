@@ -34,23 +34,23 @@ parseargs()
 
     while [ "x$#" != "x0" ];
     do
-        if [ "x$1" == "x-h" -o "x$1" == "x--help" ]; then
+        if [ "x$1" == "x--help" ]; then
             return 1
         elif [ "x$1" == "x" ]; then
             shift
-        elif [ "x$1" == "x-m" -o "x$1" == "x--mirror" ]; then
+        elif [ "x$1" == "x--mirror" ]; then
             MIRROR=`echo $2`
             shift
             shift
-        elif [ "x$1" == "x-r" -o "x$1" == "x--rootfs" ]; then
+        elif [ "x$1" == "x--rootfs" ]; then
             ROOTFS=`echo $2`
             shift
             shift
-        elif [ "x$1" == "x-v" -o "x$1" == "x--version" ]; then
+        elif [ "x$1" == "x--version" ]; then
             VERSION=`echo $2`
             shift
             shift
-        elif [ "x$1" == "x-v" -o "x$1" == "x--arch" ]; then
+        elif [ "x$1" == "x--arch" ]; then
             ARCH=`echo $2`
             shift
             shift
@@ -63,15 +63,30 @@ parseargs()
 
 get_minirootfs() {
     if [ ! -d ${ROOTFS} ];then
-      mkdir $ROOTFS
+      mkdir ${ROOTFS}
     fi
+
+    major=$(echo "${VERSION}" | cut -d. -f1)
+    minor=$(echo "${VERSION}" | cut -d. -f2)
+    patch=$(echo "${VERSION}" | cut -d. -f3)
+
+    echo "Major: $major"
+    echo "Minor: $minor"
+    echo "Patch: $patch"
+
+    echo "Downloading ${MIRROR}/alpine/v${major}.${minor}/releases/${ARCH}/alpine-minirootfs-${VERSION}-${ARCH}.tar.gz ..."
     
-    wget "${MIRROR}/alpine/v${VERSION}/releases/${ARCH}/alpine-minirootfs-${VERSION}.0-${ARCH}.tar.gz"
+    wget "${MIRROR}/alpine/v${major}.${minor}/releases/${ARCH}/alpine-minirootfs-${VERSION}-${ARCH}.tar.gz"
     
-    tar -zxvf "alpine-minirootfs-${VERSION}.0-${ARCH}.tar.gz" \
-    -C $ROOTFS
+    if [ $? -ne 0 ]; then
+        echo "Failed to download minirootfs from ${MIRROR}"
+        exit 2
+    fi
+
+    tar -zxvf "alpine-minirootfs-${VERSION}-${ARCH}.tar.gz" \
+    -C ${ROOTFS}
     
-    rm "alpine-minirootfs-${VERSION}.0-${ARCH}.tar.gz"
+    rm "alpine-minirootfs-${VERSION}-${ARCH}.tar.gz"
 }
 
 init_rootfs() {
@@ -145,7 +160,7 @@ EOF
 
     chroot ${ROOTFS} echo "root:alpine" | chpasswd
 
-    chroot ${ROOTFS} depmod -a
+    #chroot ${ROOTFS} depmod -a
 
     rm -rf ${ROOTFS}/var/cache/apk/*
 }
