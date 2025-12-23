@@ -167,7 +167,7 @@ if [[ ${atf_compile} == "no" && ${rkbin} == "yes" ]];then
     source ${src_dir}/scripts/libs/rkbin-version.sh
     fetch_rkbin
 
-    uboot_extra_config="ROCKCHIP_TPL=${work_dir}/rkbin/bin/${tpl_bin} BL31=${work_dir}/rkbin/bin/${atf_bin} \"
+    uboot_extra_config="ROCKCHIP_TPL=${work_dir}/rkbin/bin/${tpl_bin} BL31=${work_dir}/rkbin/bin/${atf_bin}"
 fi
 
 if [[ ${atf_compile} == "yes" ]];then
