@@ -124,16 +124,6 @@
 		enable-gpios = <&gpio0 RK_PB0 GPIO_ACTIVE_HIGH>;
 		enable-delay-ms = <20>;
 		status = "okay";
-
-		panel_in: port {
-			#address-cells = <1>;
-			#size-cells = <0>;
-
-			panel_in_rgb: endpoint {
-				reg = <0>;
-				remote-endpoint = <&vop_out_rgb>;
-			};
-		};
 	};
 
 };
@@ -257,30 +247,7 @@
 	pinctrl-0 = <&pwm0_pin_pull_down>;
 };
 
-&saradc {
-	vref-supply = <&vcc_1v8>;
-	status = "okay";
-};
-
-&vop {
-	status = "okay";
-
-	vop_out: port {
-		#address-cells = <1>;
-		#size-cells = <0>;
-
-		vop_out_rgb: endpoint@0 {
-			reg = <0>;
-			remote-endpoint = <&panel_in_rgb>;
-		};
-	};
-};
-
 &pwm3 {
-	status = "okay";
-};
-
-&display_subsystem {
 	status = "okay";
 };
 
@@ -310,10 +277,6 @@
 		shutdown-gpios = <&gpio4 RK_PB3 GPIO_ACTIVE_HIGH>;
 		max-speed = <1500000>;
 	};
-};
-
-&tsadc{
-  status = "okay";
 };
 
 &usb20_otg {
