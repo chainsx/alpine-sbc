@@ -34,30 +34,31 @@ parseargs()
 
     while [ "x$#" != "x0" ];
     do
-        if [ "x$1" == "x--help" ]; then
-            return 1
-        elif [ "x$1" == "x" ]; then
-            shift
-        elif [ "x$1" == "x--mirror" ]; then
-            MIRROR=`echo $2`
-            shift
-            shift
-        elif [ "x$1" == "x--rootfs" ]; then
-            ROOTFS=`echo $2`
-            shift
-            shift
-        elif [ "x$1" == "x--version" ]; then
-            VERSION=`echo $2`
-            shift
-            shift
-        elif [ "x$1" == "x--arch" ]; then
-            ARCH=`echo $2`
-            shift
-            shift
-        else
-            echo `date` - ERROR, UNKNOWN params "$@"
-            return 2
-        fi
+        case "$1" in
+            --mirror)
+                MIRROR="$2"
+                shift 2
+                ;;
+            --rootfs)
+                ROOTFS="$2"
+                shift 2
+                ;;
+            --version)
+                VERSION="$2"
+                shift 2
+                ;;
+            --arch)
+                ARCH="$2"
+                shift 2
+                ;;
+            --help|-h)
+                help 0
+                ;;
+            *)
+                log_err "Unknown parameter: $1"
+                help 2
+                ;;
+        esac
     done
 }
 
@@ -101,11 +102,23 @@ EOF
 
 }
 
+PKG_LISTS="openrc openrc-bash-completion alpine-base vim \
+           openrc-init busybox-openrc busybox-mdev-openrc \
+           busybox-suid openssh-server-common-openrc sudo \
+           util-linux btop bash-completion openssh tzdata coreutils \
+           dhcpcd mdev-conf networkmanager networkmanager-openrc \
+           networkmanager-cli networkmanager-tui networkmanager-wifi \
+           networkmanager-bluetooth networkmanager-dnsmasq"
+
 install_pkgs(){
-    chroot ${ROOTFS} apk add openrc openrc-bash-completion \
-                             openrc-init busybox-openrc busybox-mdev-openrc \
-                             busybox-suid openssh-server-common-openrc \
-                             util-linux btop bash-completion openssh tzdata dhcpcd mdev-conf
+    for pkg in ${PKG_LISTS}; do
+        echo "Installing package: ${pkg} ..."
+        chroot ${ROOTFS} apk add ${pkg}
+        if [ $? -ne 0 ]; then
+            echo "Failed to install package: ${pkg}"
+            exit 3
+        fi
+    done
 }
 
 config_rootfs(){
@@ -122,18 +135,21 @@ config_rootfs(){
     sed -i '/tty5/d' ${ROOTFS}/etc/inittab
     sed -i '/tty6/d' ${ROOTFS}/etc/inittab
 
+    echo "ttyAMA0::respawn:/sbin/getty -L 0 ttyAMA0 vt100" >> ${ROOTFS}/etc/inittab
+
     echo "Configuring Network..."
     mkdir -p ${ROOTFS}/etc/network
-    cat > ${ROOTFS}/etc/network/interfaces <<EOF
-auto lo
-iface lo inet loopback
 
-auto eth0
-iface eth0 inet dhcp
+    echo "auto lo" > ${ROOTFS}/etc/network/interfaces
+    echo "iface lo inet loopback" > ${ROOTFS}/etc/network/interfaces
 
-auto eth1
-iface eth1 inet dhcp
-EOF
+    if [ -n "${eth_interface}" ]; then
+        for iface in ${eth_interface}; do
+            echo "auto ${iface}" >> ${ROOTFS}/etc/network/interfaces
+            echo "iface ${iface} inet dhcp" >> ${ROOTFS}/etc/network/interfaces
+        done
+    fi
+
     chroot ${ROOTFS} rc-update add networking boot
     chroot ${ROOTFS} rc-update add modules boot
 

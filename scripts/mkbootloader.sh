@@ -35,18 +35,19 @@ parseargs()
 
     while [ "x$#" != "x0" ];
     do
-        if [ "x$1" == "x-h" -o "x$1" == "x--help" ]; then
-            return 1
-        elif [ "x$1" == "x" ]; then
-            shift
-        elif [ "x$1" == "x--board" ]; then
-            board=`echo $2`
-            shift
-            shift
-        else
-            echo `date` - ERROR, UNKNOWN params "$@"
-            return 2
-        fi
+        case "$1" in
+            --board)
+                board="$2"
+                shift 2
+                ;;
+            --help|-h)
+                help 0
+                ;;
+            *)
+                log_err "Unknown parameter: $1"
+                help 2
+                ;;
+        esac
     done
 }
 

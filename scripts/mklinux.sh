@@ -174,6 +174,7 @@ output_kernel() {
     
     log_info "Installing kernel devicetrees..."
     make ARCH=${kernel_arch} CROSS_COMPILE=${cross_compile} INSTALL_PATH="${out_dir}/boot" dtbs_install
+    cp -r ${out_dir}/boot/dtbs/* ${out_dir}/boot/dtb
 }
 
 default_param

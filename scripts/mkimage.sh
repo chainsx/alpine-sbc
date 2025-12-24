@@ -7,7 +7,7 @@ Usage: gen_image [OPTIONS]
 Generate bootable image.
 
 Options: 
-  -n, --name IMAGE_NAME         The image name to be built.
+  --name IMAGE_NAME         The image name to be built.
   --board BOARD_CONFIG          Required! The config of target board in the boards folder, which defaults to firefly-rk3399.
   -h, --help                    Show command help.
 "
@@ -18,11 +18,15 @@ help()
     exit $1
 }
 
+log_info() { echo -e "\033[32m[INFO] $1\033[0m"; }
+log_warn() { echo -e "\033[33m[WARN] $1\033[0m"; }
+log_err() { echo -e "\033[31m[ERR] $1\033[0m"; }
+
 default_param() {
     work_dir=$src_dir/build
     outputdir=${work_dir}/output
-    name=alpine-aarch64-alpha1
     board=extlinux-arm64
+    name=alpine-${board}-aarch64-alpha1
     platform=generic-arm64
     boot_size=128
     rootfs_dir=${work_dir}/rootfs
@@ -31,6 +35,8 @@ default_param() {
     boot_mnt=${work_dir}/boot_tmp
     root_mnt=${work_dir}/root_tmp
     log_dir=${work_dir}/log
+
+    log_info "Default parameters set."
 }
 
 parseargs()
@@ -41,44 +47,57 @@ parseargs()
 
     while [ "x$#" != "x0" ];
     do
-        if [ "x$1" == "x-h" -o "x$1" == "x--help" ]; then
-            return 1
-        elif [ "x$1" == "x" ]; then
-            shift
-        elif [ "x$1" == "x--board" ]; then
-            board=`echo $2`
-            shift
-            shift
-        else
-            echo `date` - ERROR, UNKNOWN params "$@"
-            return 2
-        fi
+        case "$1" in
+            --name)
+                name="$2"
+                shift 2
+                ;;
+            --board)
+                board="$2"
+                shift 2
+                ;;
+            --help|-h)
+                help 0
+                ;;
+            *)
+                log_err "Unknown parameter: $1"
+                help 2
+                ;;
+        esac
     done
+
+    log_info "Arguments parsed successfully."
 }
 
 LOSETUP_D_IMG(){
+    log_warn "Starting cleanup of mounts and devices."
     set +e
     if [ -d ${root_mnt} ]; then
         if grep -q "${root_mnt} " /proc/mounts ; then
+            log_warn "Unmounting ${root_mnt}"
             umount ${root_mnt}
         fi
     fi
     if [ -d ${boot_mnt} ]; then
         if grep -q "${boot_mnt} " /proc/mounts ; then
+            log_warn "Unmounting ${boot_mnt}"
             umount ${boot_mnt}
         fi
     fi
     if [ -d ${rootfs_dir} ]; then
         if grep -q "${rootfs_dir} " /proc/mounts ; then
+            log_warn "Unmounting ${rootfs_dir}"
             umount ${rootfs_dir}
         fi
     fi
     if [ -d ${boot_dir} ]; then
         if grep -q "${boot_dir} " /proc/mounts ; then
+            log_warn "Unmounting ${boot_dir}"
             umount ${boot_dir}
         fi
     fi
     if [ "x$device" != "x" ]; then
+        log_warn "Detaching device ${device}"
         kpartx -d ${device}
         losetup -d ${device}
         device=""
@@ -90,6 +109,7 @@ LOSETUP_D_IMG(){
         rm -rf ${boot_mnt}
     fi
     set -e
+    log_info "Cleanup completed."
 }
 
 buildid=$(date +%Y%m%d%H%M%S)
@@ -110,29 +130,33 @@ gen_bootmode(){
         initrd /initrd.img" \
         > ${root_mnt}/boot/extlinux/extlinux.conf
 
-        if [ -z ${dtb_name} ];then
-            echo "        fdt /${dtb_name}.dtb" >> ${root_mnt}/boot/extlinux/extlinux.conf
+        if [ -n ${dtb_name} ];then
+            echo "        fdt /dtb/${dtb_name}.dtb" >> ${root_mnt}/boot/extlinux/extlinux.conf
         fi
-    
+
         echo "        append  ${bootargs}" >> ${root_mnt}/boot/extlinux/extlinux.conf
     elif [ ${boot_mode} == "grub" ];then
         echo "TODO"
     else
+        log_err "Unknown boot mode: ${boot_mode}"
         ERROR "Unknown boot mode: ${boot_mode}"
         exit 2
     fi
 }
 
 make_img(){
+    log_info "Starting image creation process."
     if [[ -d ${work_dir}/kernel-pkg ]];then
         LOG "kernel-pkg dir check done."
     else
+        log_err "Kernel package directory check failed, please re-run mklinux.sh."
         ERROR "kernel-pkg dir check failed, please re-run mklinux.sh."
         exit 2
     fi
     if [[ -d ${work_dir}/rootfs ]];then
         LOG "rootfs dir check done."
     else
+        log_err "Rootfs directory check failed, please re-run mkrootfs.sh."
         ERROR "rootfs dir check failed, please re-run mkrootfs.sh."
         exit 2
     fi
@@ -171,10 +195,12 @@ make_img(){
     bootp=/dev/mapper/${loopX}p1
     rootp=/dev/mapper/${loopX}p2
     LOG "make image partitions done."
+    log_info "Image partitions created successfully."
     
     mkfs.vfat -n boot ${bootp}
     mkfs.ext4 -L rootfs ${rootp}
     LOG "make filesystems done."
+    log_info "Filesystems created successfully."
     mkdir -p ${root_mnt} ${boot_mnt}
     mount -t vfat ${bootp} ${boot_mnt}
     mount -t ext4 ${rootp} ${root_mnt}
@@ -186,6 +212,17 @@ make_img(){
     sync
     sleep 10
     LOG "copy root done."
+    log_info "Root filesystem copied successfully."
+
+    if [ ${platform} == "qemu" ]; then
+        log_info "Configuring for QEMU..."
+        echo "ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100" >> ${root_mnt}/etc/inittab
+    elif [ ${platform} == "rockchip64" ]; then
+        log_info "Configuring for Rockchip64..."
+        echo "ttyS2::respawn:/sbin/getty -L 1500000 ttyS2 vt100" >> ${root_mnt}/etc/inittab
+    else
+        log_warn "Unknown platform: ${platform}"
+    fi
 
     cp ${work_dir}/*apk ${root_mnt}/kernel.apk
     chroot ${root_mnt} apk add --allow-untrusted /kernel.apk
@@ -204,6 +241,7 @@ make_img(){
     uuid=${uuid%%\"*}
 
     gen_bootmode
+    log_info "Boot configuration generated."
 
     if [ -n ${boot_size} ];then
         mv ${root_mnt}/boot/* ${boot_mnt} || LOG "${root_mnt}/boot is empty."
@@ -215,6 +253,7 @@ make_img(){
     INSTALL_U_BOOT
     
     LOG "install u-boot done."
+    log_info "U-Boot installed successfully."
 
     LOSETUP_D_IMG
     losetup -D
@@ -231,16 +270,20 @@ outputd(){
     pushd $outputdir
     xz -T 20 ${name}.img
     if [ ! -f ${outputdir}/${name}.img.xz ]; then
+        log_err "XZ compression failed!"
         ERROR "xz image failed!"
         exit 2
     else
         LOG "xz image success."
+        log_info "Image compressed successfully."
     fi
 
     sha256sum ${name}.img.xz > ${name}.img.xz.sha256sum
     popd
 
     LOG "The target images: ${outputdir}/${name}.img.xz."
+
+    log_info "Image generation completed successfully."
 }
 
 set -e
@@ -253,6 +296,7 @@ if [ ! -d ${work_dir} ]; then
 fi
 
 source ${src_dir}/boards/${board}.config
+log_info "Board configuration loaded."
 source ${src_dir}/scripts/libs/bootloader-install.sh
 
 if [ ! -d ${log_dir} ];then mkdir -p ${log_dir}; fi

@@ -22,3 +22,4 @@ rootfs_arch="aarch64"
 
 part_table="gpt"
 boot_size="256"
+eth_interface="eth0"

@@ -23,7 +23,7 @@ log_err() { echo -e "\033[31m[ERR] $1\033[0m"; }
 
 default_param() {
     board="extlinux-arm64"
-    version="3.22.0"
+    version="3.23.0"
 }
 
 parseargs()
@@ -76,4 +76,4 @@ bash scripts/libs/kernel-pkg.sh
 bash scripts/mkrootfs.sh --rootfs ${src_dir}/build/rootfs \
                          --version ${version} --arch ${rootfs_arch}
 
-bash scripts/mkimage.sh --board ${board}
+bash scripts/mkimage.sh --name alpine-${board}-${version}-aarch64-alpha1 --board ${board}
