@@ -224,6 +224,15 @@ make_img(){
         log_warn "Unknown platform: ${platform}"
     fi
 
+    echo "Configuring Ethernet interfaces: ${eth_interface}"
+
+    if [ -n "${eth_interface}" ]; then
+        for iface in ${eth_interface}; do
+            echo "auto ${iface}" >> ${root_mnt}/etc/network/interfaces
+            echo "iface ${iface} inet dhcp" >> ${root_mnt}/etc/network/interfaces
+        done
+    fi
+
     cp ${work_dir}/*apk ${root_mnt}/kernel.apk
     chroot ${root_mnt} apk add --allow-untrusted /kernel.apk
     rm ${root_mnt}/kernel.apk

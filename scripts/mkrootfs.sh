@@ -141,14 +141,7 @@ config_rootfs(){
     mkdir -p ${ROOTFS}/etc/network
 
     echo "auto lo" > ${ROOTFS}/etc/network/interfaces
-    echo "iface lo inet loopback" > ${ROOTFS}/etc/network/interfaces
-
-    if [ -n "${eth_interface}" ]; then
-        for iface in ${eth_interface}; do
-            echo "auto ${iface}" >> ${ROOTFS}/etc/network/interfaces
-            echo "iface ${iface} inet dhcp" >> ${ROOTFS}/etc/network/interfaces
-        done
-    fi
+    echo "iface lo inet loopback" >> ${ROOTFS}/etc/network/interfaces
 
     chroot ${ROOTFS} rc-update add networking boot
     chroot ${ROOTFS} rc-update add modules boot
@@ -174,7 +167,7 @@ EOF
 
     sed -i 's/\/bin\/ash/\/bin\/bash/g' ${ROOTFS}/etc/passwd
 
-    chroot ${ROOTFS} echo "root:alpine" | chpasswd
+    chroot ${ROOTFS} echo "root:1234" | chpasswd
 
     #chroot ${ROOTFS} depmod -a
 
