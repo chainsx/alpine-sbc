@@ -62,7 +62,10 @@ apk add bash gcc g++ ncurses-dev flex binutils \
              openssl-dev perl coreutils losetup \
              parted sgdisk kpartx e2fsprogs lsblk \
              rsync xz python3 py3-setuptools swig \
-             python3-dev py3-elftools sudo
+             python3-dev py3-elftools sudo mpc1-dev \
+             mpfr-dev build-base ncurses-dev bison \
+             flex elfutils-dev openssl-dev perl \
+             linux-headers
 
 bash scripts/mkbootloader.sh --board ${board}
 

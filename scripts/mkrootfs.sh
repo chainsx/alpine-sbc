@@ -167,7 +167,10 @@ EOF
 
     sed -i 's/\/bin\/ash/\/bin\/bash/g' ${ROOTFS}/etc/passwd
 
-    chroot ${ROOTFS} echo "root:1234" | chpasswd
+    cat <<EOF | chroot ${ROOTFS} passwd root
+1234
+1234
+EOF
 
     #chroot ${ROOTFS} depmod -a
 

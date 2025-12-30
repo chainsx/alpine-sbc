@@ -126,11 +126,13 @@ LOG(){
 gen_bootmode(){
     if [ ${boot_mode} == "extlinux" ];then
         echo "label Alpine
-        kernel /Image
-        initrd /initrd.img" \
-        > ${root_mnt}/boot/extlinux/extlinux.conf
+        kernel /Image" > ${root_mnt}/boot/extlinux/extlinux.conf
 
-        if [ -n ${dtb_name} ];then
+        if [[ ${initrd} == "yes" ]];then
+            echo "        initrd /initrd.img" >> ${root_mnt}/boot/extlinux/extlinux.conf
+        fi
+
+        if [[ ${dtb_name} != "none" ]];then
             echo "        fdt /dtb/${dtb_name}.dtb" >> ${root_mnt}/boot/extlinux/extlinux.conf
         fi
 
@@ -236,7 +238,7 @@ make_img(){
     cp ${work_dir}/*apk ${root_mnt}/kernel.apk
     chroot ${root_mnt} apk add --allow-untrusted /kernel.apk
     rm ${root_mnt}/kernel.apk
-    
+
     chroot ${root_mnt} apk add dracut
     chroot ${root_mnt} dracut --no-kernel
     cp ${root_mnt}/boot/initramfs* ${root_mnt}/boot/initrd.img
@@ -258,7 +260,7 @@ make_img(){
 
     umount $rootp
     umount $bootp
-    
+
     INSTALL_U_BOOT
     
     LOG "install u-boot done."
