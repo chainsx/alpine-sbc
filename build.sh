@@ -71,6 +71,7 @@ bash scripts/mkbootloader.sh --board ${board}
 
 bash scripts/mklinux.sh \
            --kernel_arch ${arch} \
+           --kernel_url ${kernel_url} \
            --kernel_branch ${kernel_branch} \
            --kernel_config ${kernel_config}
 
