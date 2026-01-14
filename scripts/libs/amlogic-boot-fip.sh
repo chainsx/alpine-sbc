@@ -22,6 +22,13 @@ fetch_aml_fip(){
 mk_amlogic_fip(){
     pushd ${work_dir}/amlogic-boot-fip
     mkdir -p ${work_dir}/u-boot/output
-    ./build-fip.sh: ${board} ${work_dir}/u-boot/u-boot.bin ${work_dir}/u-boot/output
+    ./build-fip.sh ${board} ${work_dir}/u-boot/u-boot.bin ${work_dir}/u-boot/output
+    if [ ! -f ${work_dir}/u-boot/output/u-boot.bin.sd.bin ];then
+        echo "build amlogic fip failed!"
+        exit 2
+    fi
     popd
 }
+
+#fetch_aml_fip
+#mk_amlogic_fip

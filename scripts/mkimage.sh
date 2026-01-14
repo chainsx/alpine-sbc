@@ -167,7 +167,7 @@ make_img(){
     LOSETUP_D_IMG
     root_size=`du -sh --block-size=1MiB ${work_dir}/rootfs | cut -f 1 | xargs`
     kernel_size=`du -sh --block-size=1MiB ${work_dir}/kernel-pkg | cut -f 1 | xargs`
-    size=$((${root_size}+${boot_size}+${kernel_size}+100))
+    size=$((${root_size}+${boot_size}+${kernel_size}+200))
     losetup -D
     img_file=${work_dir}/${name}.img
     LOG create ${img_file} size of ${size}MiB
@@ -182,9 +182,6 @@ make_img(){
     parted ${img_file} mkpart primary fat32 ${section1_start}s ${section1_end}s
     parted ${img_file} -s set 1 boot on
     parted ${img_file} mkpart primary ext4 $(($section1_end+1))s 100%
-    
-    sgdisk -c 1:"bootfs" ${img_file}
-    sgdisk -c 2:"rootfs" ${img_file}
 
     device=`losetup -f --show -P ${img_file}`
     LOG "after losetup: ${device}"
@@ -199,7 +196,7 @@ make_img(){
     LOG "make image partitions done."
     log_info "Image partitions created successfully."
     
-    mkfs.vfat -n boot ${bootp}
+    mkfs.vfat -n bootfs ${bootp}
     mkfs.ext4 -L rootfs ${rootp}
     LOG "make filesystems done."
     log_info "Filesystems created successfully."
