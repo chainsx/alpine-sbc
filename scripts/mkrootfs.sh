@@ -128,16 +128,6 @@ config_rootfs(){
 
     chroot ${ROOTFS} rc-update add mdev sysinit
 
-    sed -i '/tty1/d' ${ROOTFS}/etc/inittab
-    sed -i '/tty2/d' ${ROOTFS}/etc/inittab
-    sed -i '/tty3/d' ${ROOTFS}/etc/inittab
-    sed -i '/tty4/d' ${ROOTFS}/etc/inittab
-    sed -i '/tty5/d' ${ROOTFS}/etc/inittab
-    sed -i '/tty6/d' ${ROOTFS}/etc/inittab
-
-    echo "ttyAMA0::respawn:/sbin/getty -L 0 ttyAMA0 vt100" >> ${ROOTFS}/etc/inittab
-
-    echo "Configuring Network..."
     mkdir -p ${ROOTFS}/etc/network
 
     echo "auto lo" > ${ROOTFS}/etc/network/interfaces

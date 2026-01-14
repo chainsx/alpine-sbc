@@ -37,6 +37,15 @@ INSTALL_U_BOOT(){
             ERROR "allwinner u-boot file can not be found!"
             exit 2
         fi
+    elif [ "${platform}" == "amlogic" ];then
+        echo "Installing Amlogic U-Boot..."
+        if [ -f ${uboot_dir}/output/u-boot.sd.bin ]; then
+            dd if=${uboot_dir}/output/u-boot.sd.bin of=/dev/${loopX} bs=1 count=442 conv=fsync
+            dd if=${uboot_dir}/output/u-boot.sd.bin of=/dev/${loopX} bs=512 skip=1 seek=1 conv=fsync
+        else
+            ERROR "amlogic u-boot file can not be found!"
+            exit 2
+        fi
     else
         echo "Unsupported platform"
     fi

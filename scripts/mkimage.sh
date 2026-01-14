@@ -167,7 +167,7 @@ make_img(){
     LOSETUP_D_IMG
     root_size=`du -sh --block-size=1MiB ${work_dir}/rootfs | cut -f 1 | xargs`
     kernel_size=`du -sh --block-size=1MiB ${work_dir}/kernel-pkg | cut -f 1 | xargs`
-    size=$((${root_size}+${boot_size}+${kernel_size}+880))
+    size=$((${root_size}+${boot_size}+${kernel_size}+100))
     losetup -D
     img_file=${work_dir}/${name}.img
     LOG create ${img_file} size of ${size}MiB
@@ -218,10 +218,20 @@ make_img(){
 
     if [ ${platform} == "qemu" ]; then
         log_info "Configuring for QEMU..."
-        echo "ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100" >> ${root_mnt}/etc/inittab
+        echo "ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100" >> ${root_mnt}/etc/inittab
+        echo "ttyS0" >> ${root_mnt}/etc/securetty
     elif [ ${platform} == "rockchip64" ]; then
         log_info "Configuring for Rockchip64..."
-        echo "ttyS2::respawn:/sbin/getty -L 1500000 ttyS2 vt100" >> ${root_mnt}/etc/inittab
+        echo "ttyS2::respawn:/sbin/getty -L ttyS2 1500000 vt100" >> ${root_mnt}/etc/inittab
+        echo "ttyS2" >> ${root_mnt}/etc/securetty
+    elif [ ${platform} == "amlogic" ]; then
+        log_info "Configuring for Amlogic..."
+        echo "ttyAML0::respawn:/sbin/getty -L ttyAML0 115200 vt100" >> ${root_mnt}/etc/inittab
+        echo "ttyAML0" >> ${root_mnt}/etc/securetty
+    elif [ ${platform} == "allwinner" ]; then
+        log_info "Configuring for Allwinner..."
+        echo "ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100" >> ${root_mnt}/etc/inittab
+        echo "ttyS0" >> ${root_mnt}/etc/securetty
     else
         log_warn "Unknown platform: ${platform}"
     fi

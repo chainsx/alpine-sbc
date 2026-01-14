@@ -59,7 +59,7 @@ esac
 
 fetch_rkbin(){
     if [ ! -d ${work_dir}/rkbin ];then
-        git clone https://github.com/rockchip-linux/rkbin.git ${work_dir}/rkbin
+        git clone ${RKBIN_SOURCE_URL} ${work_dir}/rkbin
 
         pushd ${work_dir}/rkbin
         git checkout ${RKBIN_SOURCE_VERSION}

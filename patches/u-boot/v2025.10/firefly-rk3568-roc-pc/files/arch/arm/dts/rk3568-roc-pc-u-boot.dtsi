@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * (C) Copyright 2021 Rockchip Electronics Co., Ltd
+ */
+
+#include "rk356x-u-boot.dtsi"
+
+&sdhci {
+	cap-mmc-highspeed;
+	mmc-hs200-1_8v;
+	mmc-hs400-1_8v;
+	mmc-hs400-enhanced-strobe;
+};
+
+&usb_host0_ohci {
+	status = "disabled";
+};
+
+&vdd_npu {
+	regulator-always-on;
+	regulator-boot-on;
+	regulator-init-microvolt = <900000>;
+};

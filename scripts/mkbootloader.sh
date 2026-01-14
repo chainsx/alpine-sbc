@@ -184,3 +184,9 @@ if [ ! -f ${work_dir}/u-boot/.patched ];then
 fi
 
 compile_u-boot
+
+if [[ ${atf_compile} == "no" && ${amlogic_boot_fip} == "yes" ]];then
+    source ${src_dir}/scripts/libs/amlogic-boot-fip.sh
+    fetch_aml_fip
+    mk_amlogic_fip
+fi
