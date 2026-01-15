@@ -65,7 +65,7 @@ apk add bash gcc g++ ncurses-dev flex binutils \
              python3-dev py3-elftools sudo mpc1-dev \
              mpfr-dev build-base ncurses-dev bison \
              flex elfutils-dev openssl-dev perl \
-             linux-headers qemu-x86_64
+             linux-headers qemu-x86_64 util-linux-dev dtc sfdisk
 
 bash scripts/mkbootloader.sh --board ${board}
 

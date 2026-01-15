@@ -82,7 +82,7 @@ fetch_u-boot() {
             fi
         fi
     else
-        git clone --depth=1 -b ${bootloader_branch} ${bootloader_url}
+        git clone --depth=1 -b ${bootloader_branch} ${bootloader_url} u-boot
         LOG "clone u-boot done."
     fi
     popd
@@ -170,8 +170,10 @@ fi
 
 if [[ ${atf_compile} == "yes" ]];then
     source ${src_dir}/scripts/libs/atf-compile.sh
-    
     fetch_atf
+    if [ ! -f ${work_dir}/atf-src/.patched ];then
+        patch_atf
+    fi
     compile_atf
 fi
 
@@ -184,6 +186,17 @@ if [ ! -f ${work_dir}/u-boot/.patched ];then
 fi
 
 compile_u-boot
+
+if [[ ${optee_compile} == "yes" ]];then
+    source ${src_dir}/scripts/libs/optee-compile.sh
+    fetch_optee
+    compile_optee
+fi
+
+if [[ ${atf_compile} == "yes" && ${stm32mp2_boot_fip} == "yes" ]];then
+    source ${src_dir}/scripts/libs/atf-compile.sh
+    mk_stm32mp2_boot_fip
+fi
 
 if [[ ${atf_compile} == "no" && ${amlogic_boot_fip} == "yes" ]];then
     source ${src_dir}/scripts/libs/amlogic-boot-fip.sh

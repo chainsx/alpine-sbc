@@ -65,6 +65,14 @@ sudo bash build.sh --board extlinux-arm64 --version 3.23.0
         sudo bash build.sh --board khadas-vim3 --version 3.23.0
         ```
 
+5.  MYiR
+
+    - myb-stm32mp257x-1GB
+
+        ```
+        sudo bash build.sh --board myb-stm32mp257x-1GB --version 3.23.0
+        ```
+
 ## Reference
 
 Alpine Linux: https://www.alpinelinux.org/

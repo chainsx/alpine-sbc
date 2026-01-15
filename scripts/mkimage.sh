@@ -229,6 +229,10 @@ make_img(){
         log_info "Configuring for Allwinner..."
         echo "ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100" >> ${root_mnt}/etc/inittab
         echo "ttyS0" >> ${root_mnt}/etc/securetty
+    elif [ ${platform} == "atm32mp2" ]; then
+        log_info "Configuring for STM32MP2..."
+        echo "ttySTM0::respawn:/sbin/getty -L ttyS0 115200 vt100" >> ${root_mnt}/etc/inittab
+        echo "ttySTM0" >> ${root_mnt}/etc/securetty
     else
         log_warn "Unknown platform: ${platform}"
     fi

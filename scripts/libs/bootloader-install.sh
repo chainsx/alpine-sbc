@@ -46,6 +46,24 @@ INSTALL_U_BOOT(){
             ERROR "amlogic u-boot file can not be found!"
             exit 2
         fi
+    elif [ "${platform}" == "stm32mp2" ];then
+        echo "Installing STM32MP2 U-Boot..."
+        if [ -f ${work_dir}/atf-src/build/stm32mp2/release/fip.bin ]; then
+            part_num=$(fdisk -l | grep "^/dev/${loopX}" | wc -l)
+
+            echo "2048,2048" | sfdisk --no-reread --append /dev/${loopX}
+            sgdisk -c $((part_num+1)):"fsbla" /dev/${loopX}
+            echo "4096,8192" | sfdisk --no-reread --append /dev/${loopX}
+            sgdisk -c $((part_num+2)):"fip" /dev/${loopX}
+            echo "12288,2048" | sfdisk --no-reread --append /dev/${loopX}
+            sgdisk -c $((part_num+3)):"u-boot-env" /dev/${loopX}
+	
+            dd if=${work_dir}/atf-src/build/stm32mp2/release/tf-a-${board}.stm32 of=/dev/${loopX} bs=512 seek=2048 conv=notrunc
+            dd if=${work_dir}/atf-src/build/stm32mp2/release/fip.bin of=/dev/${loopX} bs=512 seek=4096 conv=notrunc
+        else
+            ERROR "stm32mp2 u-boot file can not be found!"
+            exit 2
+        fi
     else
         echo "Unsupported platform"
     fi

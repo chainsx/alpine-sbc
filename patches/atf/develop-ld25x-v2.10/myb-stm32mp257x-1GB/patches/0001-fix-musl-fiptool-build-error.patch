@@ -1,0 +1,42 @@
+From df97dd0362c0891579483bcc083419ac1bc29ab5 Mon Sep 17 00:00:00 2001
+From: chainsx <i@chainsx.cn>
+Date: Thu, 15 Jan 2026 09:53:39 +0000
+Subject: [PATCH] fix-musl-fiptool-build-error
+
+---
+ tools/fiptool/fiptool.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/tools/fiptool/fiptool.c b/tools/fiptool/fiptool.c
+index 6c566ef..72b849d 100644
+--- a/tools/fiptool/fiptool.c
++++ b/tools/fiptool/fiptool.c
+@@ -18,7 +18,10 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+-
++#ifdef __linux__
++#include <unistd.h>
++#include <sys/syscall.h>
++#endif
+ #include "fiptool.h"
+ #include "tbbr_config.h"
+ 
+@@ -314,7 +317,12 @@ static int parse_fip(const char *filename, fip_toc_header_t *toc_header_out)
+ 
+ #ifdef BLKGETSIZE64
+ 	if ((st.st_mode & S_IFBLK) != 0)
+-		if (ioctl(fileno(fp), BLKGETSIZE64, &st_size) == -1)
++#ifdef __linux__
++                if (syscall(SYS_ioctl, fileno(fp),
++                            (unsigned long)BLKGETSIZE64, &st_size) == -1)
++#else
++                if (ioctl(fileno(fp), BLKGETSIZE64, &st_size) == -1)
++#endif
+ 			log_err("ioctl %s", filename);
+ #endif
+ 
+-- 
+2.34.1
+
