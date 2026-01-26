@@ -49,7 +49,7 @@ INSTALL_U_BOOT(){
     elif [ "${platform}" == "stm32mp2" ];then
         echo "Installing STM32MP2 U-Boot..."
         if [ -f ${work_dir}/atf-src/build/stm32mp2/release/fip.bin ]; then
-            part_num=$(fdisk -l | grep "^/dev/${loopX}" | wc -l)
+            part_num=$(parted -s /dev/${loopX} print | awk '$1 ~ /^[0-9]+$/ {c++} END{print c+0}')
 
             echo "2048,2048" | sfdisk --no-reread --append /dev/${loopX}
             sgdisk -c $((part_num+1)):"fsbla" /dev/${loopX}
