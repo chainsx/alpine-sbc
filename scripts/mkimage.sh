@@ -1,328 +1,195 @@
-#!/bin/bash
-set -e
-set -x
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-__usage="
-Usage: gen_image [OPTIONS]
-Generate bootable image.
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/libs/common.sh
+source "$PROJECT_ROOT/scripts/libs/common.sh"
 
-Options: 
-  --name IMAGE_NAME         The image name to be built.
-  --board BOARD_CONFIG          Required! The config of target board in the boards folder, which defaults to firefly-rk3399.
-  -h, --help                    Show command help.
-"
+usage() {
+	cat <<'EOF'
+Usage: scripts/mkimage.sh --board NAME [options]
 
-help()
-{
-    echo "$__usage"
-    exit $1
+Options:
+  --board NAME    Board configuration name
+  --name NAME     Output image basename (without .img)
+  -h, --help      Show this help
+EOF
 }
 
-log_info() { echo -e "\033[32m[INFO] $1\033[0m"; }
-log_warn() { echo -e "\033[33m[WARN] $1\033[0m"; }
-log_err() { echo -e "\033[31m[ERR] $1\033[0m"; }
+board=""
+name=""
+kernel_flavor=""
+dtb_name=""
+boot_size=""
+part_table=""
+bootargs=""
+boot_mode=""
+KERNEL_FLAVOR=""
+while (($#)); do
+	case "$1" in
+		--board | --name)
+			require_arg_value "$1" "${2:-}"
+			case "$1" in
+				--board) board="$2" ;;
+				--name) name="$2" ;;
+			esac
+			shift 2
+			;;
+		-h | --help) usage; exit 0 ;;
+		*) die "Unknown option: $1" ;;
+	esac
+done
+[[ -n "$board" ]] || die "--board is required."
+[[ -n "$name" ]] || name="alpine-$board-aarch64"
+[[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "Invalid image name: $name"
 
-default_param() {
-    work_dir=$src_dir/build
-    outputdir=${work_dir}/output
-    board=extlinux-arm64
-    name=alpine-${board}-aarch64-alpha1
-    platform=generic-arm64
-    boot_size=128
-    rootfs_dir=${work_dir}/rootfs
-    boot_dir=${work_dir}/rootfs/boot
-    uboot_dir=${work_dir}/u-boot
-    boot_mnt=${work_dir}/boot_tmp
-    root_mnt=${work_dir}/root_tmp
-    log_dir=${work_dir}/log
+init_logging image
+enable_error_trap
+require_root
+require_commands awk du mount mountpoint umount parted losetup mkfs.vfat mkfs.ext4 \
+	rsync sha256sum sync truncate xz
+load_board_config "$board"
+require_board_variables platform boot_mode bootargs part_table boot_size dtb_name
 
-    log_info "Default parameters set."
-}
+package_manifest="$WORK_DIR/packages/kernel-packages.env"
+[[ -f "$package_manifest" ]] || die "Kernel package manifest is missing."
+# shellcheck disable=SC1090
+source "$package_manifest"
+[[ "$KERNEL_FLAVOR" == "$kernel_flavor" ]] || die "Kernel package flavor does not match board '$board'."
 
-parseargs()
-{
-    if [ "x$#" == "x0" ]; then
-        return 0
-    fi
+rootfs_dir="$WORK_DIR/rootfs"
+# Used by the sourced bootloader installation function.
+# shellcheck disable=SC2034
+uboot_dir="$WORK_DIR/u-boot"
+output_dir="$WORK_DIR/output"
+mount_dir="$WORK_DIR/image-mounts"
+root_mount="$mount_dir/root"
+boot_mount="$mount_dir/boot"
+image_file="$WORK_DIR/$name.img"
+device=""
 
-    while [ "x$#" != "x0" ];
-    do
-        case "$1" in
-            --name)
-                name="$2"
-                shift 2
-                ;;
-            --board)
-                board="$2"
-                shift 2
-                ;;
-            --help|-h)
-                help 0
-                ;;
-            *)
-                log_err "Unknown parameter: $1"
-                help 2
-                ;;
-        esac
-    done
-
-    log_info "Arguments parsed successfully."
-}
-
-LOSETUP_D_IMG(){
-    log_warn "Starting cleanup of mounts and devices."
-    set +e
-    if [ -d ${root_mnt} ]; then
-        if grep -q "${root_mnt} " /proc/mounts ; then
-            log_warn "Unmounting ${root_mnt}"
-            umount ${root_mnt}
-        fi
-    fi
-    if [ -d ${boot_mnt} ]; then
-        if grep -q "${boot_mnt} " /proc/mounts ; then
-            log_warn "Unmounting ${boot_mnt}"
-            umount ${boot_mnt}
-        fi
-    fi
-    if [ -d ${rootfs_dir} ]; then
-        if grep -q "${rootfs_dir} " /proc/mounts ; then
-            log_warn "Unmounting ${rootfs_dir}"
-            umount ${rootfs_dir}
-        fi
-    fi
-    if [ -d ${boot_dir} ]; then
-        if grep -q "${boot_dir} " /proc/mounts ; then
-            log_warn "Unmounting ${boot_dir}"
-            umount ${boot_dir}
-        fi
-    fi
-    if [ "x$device" != "x" ]; then
-        log_warn "Detaching device ${device}"
-        kpartx -d ${device}
-        losetup -d ${device}
-        device=""
-    fi
-    if [ -d ${root_mnt} ]; then
-        rm -rf ${root_mnt}
-    fi
-    if [ -d ${boot_mnt} ]; then
-        rm -rf ${boot_mnt}
-    fi
-    set -e
-    log_info "Cleanup completed."
-}
-
-buildid=$(date +%Y%m%d%H%M%S)
-builddate=${buildid:0:8}
-
-ERROR(){
-    echo `date` - ERROR, $* | tee -a ${log_dir}/${builddate}.log
-}
-
-LOG(){
-    echo `date` - INFO, $* | tee -a ${log_dir}/${builddate}.log
-}
-
-gen_bootmode(){
-    if [ ${boot_mode} == "extlinux" ];then
-        echo "label Alpine
-        kernel /Image" > ${root_mnt}/boot/extlinux/extlinux.conf
-
-        if [[ ${initrd} == "yes" ]];then
-            echo "        initrd /initrd.img" >> ${root_mnt}/boot/extlinux/extlinux.conf
-        fi
-
-        if [[ ${dtb_name} != "none" ]];then
-            echo "        fdt /dtb/${dtb_name}.dtb" >> ${root_mnt}/boot/extlinux/extlinux.conf
-        fi
-
-        echo "        append  ${bootargs}" >> ${root_mnt}/boot/extlinux/extlinux.conf
-    elif [ ${boot_mode} == "grub" ];then
-        echo "TODO"
-    else
-        log_err "Unknown boot mode: ${boot_mode}"
-        ERROR "Unknown boot mode: ${boot_mode}"
-        exit 2
-    fi
-}
-
-make_img(){
-    log_info "Starting image creation process."
-    if [[ -d ${work_dir}/kernel-pkg ]];then
-        LOG "kernel-pkg dir check done."
-    else
-        log_err "Kernel package directory check failed, please re-run mklinux.sh."
-        ERROR "kernel-pkg dir check failed, please re-run mklinux.sh."
-        exit 2
-    fi
-    if [[ -d ${work_dir}/rootfs ]];then
-        LOG "rootfs dir check done."
-    else
-        log_err "Rootfs directory check failed, please re-run mkrootfs.sh."
-        ERROR "rootfs dir check failed, please re-run mkrootfs.sh."
-        exit 2
-    fi
-
-    device=""
-    LOSETUP_D_IMG
-    root_size=`du -sh --block-size=1MiB ${work_dir}/rootfs | cut -f 1 | xargs`
-    kernel_size=`du -sh --block-size=1MiB ${work_dir}/kernel-pkg | cut -f 1 | xargs`
-    size=$((${root_size}+${boot_size}+${kernel_size}+200))
-    losetup -D
-    img_file=${work_dir}/${name}.img
-    LOG create ${img_file} size of ${size}MiB
-    dd if=/dev/zero of=${img_file} bs=1MiB count=$size status=progress && sync
-
-    LOG "create ${part_table} partition table."
-
-    section1_start=32768
-    section1_end=$((${section1_start}+(${boot_size}*2048)-1))
-
-    parted ${img_file} mklabel ${part_table}
-    parted ${img_file} mkpart primary fat32 ${section1_start}s ${section1_end}s
-    parted ${img_file} -s set 1 boot on
-    parted ${img_file} mkpart primary ext4 $(($section1_end+1))s 100%
-
-    device=`losetup -f --show -P ${img_file}`
-    LOG "after losetup: ${device}"
-    trap 'LOSETUP_D_IMG' EXIT
-    LOG "image ${img_file} created and mounted as ${device}"
-    kpartx -va ${device}
-    loopX=${device##*\/}
-    partprobe ${device}
-
-    bootp=/dev/mapper/${loopX}p1
-    rootp=/dev/mapper/${loopX}p2
-    LOG "make image partitions done."
-    log_info "Image partitions created successfully."
-    
-    mkfs.vfat -n bootfs ${bootp}
-    mkfs.ext4 -L rootfs ${rootp}
-    LOG "make filesystems done."
-    log_info "Filesystems created successfully."
-    mkdir -p ${root_mnt} ${boot_mnt}
-    mount -t vfat ${bootp} ${boot_mnt}
-    mount -t ext4 ${rootp} ${root_mnt}
-
-    rootfs_dir=${work_dir}/rootfs
-    boot_dir=${work_dir}/rootfs/boot
-    
-    rsync -avHAXq ${rootfs_dir}/* ${root_mnt}
-    sync
-    sleep 10
-    LOG "copy root done."
-    log_info "Root filesystem copied successfully."
-
-    if [ ${platform} == "qemu" ]; then
-        log_info "Configuring for QEMU..."
-        echo "ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100" >> ${root_mnt}/etc/inittab
-        echo "ttyS0" >> ${root_mnt}/etc/securetty
-    elif [ ${platform} == "rockchip64" ]; then
-        log_info "Configuring for Rockchip64..."
-        echo "ttyS2::respawn:/sbin/getty -L ttyS2 1500000 vt100" >> ${root_mnt}/etc/inittab
-        echo "ttyS2" >> ${root_mnt}/etc/securetty
-    elif [ ${platform} == "amlogic" ]; then
-        log_info "Configuring for Amlogic..."
-        echo "ttyAML0::respawn:/sbin/getty -L ttyAML0 115200 vt100" >> ${root_mnt}/etc/inittab
-        echo "ttyAML0" >> ${root_mnt}/etc/securetty
-    elif [ ${platform} == "allwinner" ]; then
-        log_info "Configuring for Allwinner..."
-        echo "ttyS0::respawn:/sbin/getty -L ttyS0 115200 vt100" >> ${root_mnt}/etc/inittab
-        echo "ttyS0" >> ${root_mnt}/etc/securetty
-    elif [ ${platform} == "atm32mp2" ]; then
-        log_info "Configuring for STM32MP2..."
-        echo "ttySTM0::respawn:/sbin/getty -L ttyS0 115200 vt100" >> ${root_mnt}/etc/inittab
-        echo "ttySTM0" >> ${root_mnt}/etc/securetty
-    else
-        log_warn "Unknown platform: ${platform}"
-    fi
-
-    echo "Configuring Ethernet interfaces: ${eth_interface}"
-
-    if [ -n "${eth_interface}" ]; then
-        for iface in ${eth_interface}; do
-            echo "auto ${iface}" >> ${root_mnt}/etc/network/interfaces
-            echo "iface ${iface} inet dhcp" >> ${root_mnt}/etc/network/interfaces
-        done
-    fi
-
-    cp ${work_dir}/*apk ${root_mnt}/kernel.apk
-    chroot ${root_mnt} apk add --allow-untrusted /kernel.apk
-    rm ${root_mnt}/kernel.apk
-
-    chroot ${root_mnt} apk add dracut
-    chroot ${root_mnt} dracut --no-kernel
-    cp ${root_mnt}/boot/initramfs* ${root_mnt}/boot/initrd.img
-
-    if [ ! -d ${root_mnt}/boot/extlinux ];then
-        mkdir ${root_mnt}/boot/extlinux
-    fi
-
-    line=$(blkid | grep $rootp)
-    uuid=${line#*UUID=\"}
-    uuid=${uuid%%\"*}
-
-    gen_bootmode
-    log_info "Boot configuration generated."
-
-    if [ -n ${boot_size} ];then
-        mv ${root_mnt}/boot/* ${boot_mnt} || LOG "${root_mnt}/boot is empty."
-    fi
-
-    umount $rootp
-    umount $bootp
-
-    INSTALL_U_BOOT
-    
-    LOG "install u-boot done."
-    log_info "U-Boot installed successfully."
-
-    LOSETUP_D_IMG
-    losetup -D
-}
-
-outputd(){
-    if [ -d ${outputdir} ];then
-        find ${outputdir} -name "${name}.img" -o -name "${name}.tar.gz" -o -name "${name}.img.xz" -delete
-    else
-        mkdir -p $outputdir
-    fi
-    mv ${work_dir}/${name}.img ${outputdir}
-    LOG "xz image begin..."
-    pushd $outputdir
-    xz -T 20 ${name}.img
-    if [ ! -f ${outputdir}/${name}.img.xz ]; then
-        log_err "XZ compression failed!"
-        ERROR "xz image failed!"
-        exit 2
-    else
-        LOG "xz image success."
-        log_info "Image compressed successfully."
-    fi
-
-    sha256sum ${name}.img.xz > ${name}.img.xz.sha256sum
-    popd
-
-    LOG "The target images: ${outputdir}/${name}.img.xz."
-
-    log_info "Image generation completed successfully."
-}
-
-set -e
-src_dir=$(pwd)
-default_param
-parseargs "$@" || help $?
-
-if [ ! -d ${work_dir} ]; then
-    mkdir ${work_dir}
+[[ -f "$rootfs_dir/etc/alpine-release" ]] || die "Root filesystem is missing or incomplete: $rootfs_dir"
+[[ -f "$rootfs_dir/boot/vmlinuz-$KERNEL_FLAVOR" ]] \
+	|| die "Kernel image is missing from rootfs."
+if [[ "${initrd:-yes}" == yes ]]; then
+	[[ -s "$rootfs_dir/boot/initramfs-$KERNEL_FLAVOR" ]] || die "Initramfs is missing from rootfs."
 fi
+if [[ "$dtb_name" != none ]]; then
+	[[ -f "$rootfs_dir/boot/dtbs-$KERNEL_FLAVOR/$dtb_name.dtb" ]] \
+		|| die "Board DTB is missing: dtbs-$KERNEL_FLAVOR/$dtb_name.dtb"
+fi
+[[ "$boot_size" =~ ^[1-9][0-9]*$ ]] || die "boot_size must be an integer number of MiB."
+case "$part_table" in gpt | msdos) ;; *) die "Unsupported partition table: $part_table" ;; esac
 
-source ${src_dir}/boards/${board}.config
-log_info "Board configuration loaded."
-source ${src_dir}/scripts/libs/bootloader-install.sh
+# shellcheck source=scripts/libs/bootloader-install.sh
+source "$PROJECT_ROOT/scripts/libs/bootloader-install.sh"
 
-if [ ! -d ${log_dir} ];then mkdir -p ${log_dir}; fi
+cleanup_image() {
+	local rc=$?
+	set +e
+	trap - EXIT
+	mountpoint -q "$boot_mount" && umount "$boot_mount"
+	mountpoint -q "$root_mount" && umount "$root_mount"
+	if [[ -n "$device" ]]; then
+		losetup -d "$device" 2>/dev/null || true
+	fi
+	rm -rf "$mount_dir"
+	if (( rc != 0 )); then
+		log_error "Image generation failed; incomplete image retained at $image_file"
+	fi
+	return "$rc"
+}
+trap cleanup_image EXIT
 
-LOG "gen image..."
-make_img
-outputd
+wait_for_path() {
+	local path="$1" attempts=50
+	while [[ ! -b "$path" && $attempts -gt 0 ]]; do
+		sleep 0.1
+		attempts=$((attempts - 1))
+	done
+	[[ -b "$path" ]] || die "Partition device did not appear: $path"
+}
+
+generate_extlinux() {
+	local directory="$1"
+	mkdir -p "$directory/extlinux"
+	{
+		printf 'default Alpine\n'
+		printf 'timeout 30\n\n'
+		printf 'label Alpine\n'
+		printf '  kernel /vmlinuz-%s\n' "$KERNEL_FLAVOR"
+		if [[ "${initrd:-yes}" == yes ]]; then
+			printf '  initrd /initramfs-%s\n' "$KERNEL_FLAVOR"
+		fi
+		if [[ "$dtb_name" != none ]]; then
+			printf '  fdt /dtbs-%s/%s.dtb\n' "$KERNEL_FLAVOR" "$dtb_name"
+		fi
+		printf '  append %s\n' "$bootargs"
+	} > "$directory/extlinux/extlinux.conf"
+}
+
+[[ "$boot_mode" == extlinux ]] || die "Only extlinux boot mode is currently implemented."
+
+root_mib="$(du -sm "$rootfs_dir" | awk '{print $1}')"
+boot_mib="$(du -sm "$rootfs_dir/boot" | awk '{print $1}')"
+(( boot_mib + 32 <= boot_size )) \
+	|| die "boot_size=${boot_size}MiB is too small for ${boot_mib}MiB of boot files."
+image_mib=$((root_mib + boot_size + 512))
+
+rm -f "$image_file"
+mkdir -p "$mount_dir" "$output_dir"
+log_info "Creating sparse ${image_mib}MiB image: $image_file"
+truncate -s "${image_mib}M" "$image_file"
+
+boot_start=32768
+boot_end=$((boot_start + boot_size * 2048 - 1))
+parted -s "$image_file" mklabel "$part_table"
+parted -s "$image_file" unit s mkpart primary fat32 "${boot_start}s" "${boot_end}s"
+parted -s "$image_file" set 1 boot on
+parted -s "$image_file" unit s mkpart primary ext4 "$((boot_end + 1))s" 100%
+
+device="$(losetup --find --show --partscan "$image_file")"
+# Used by the sourced bootloader installation function.
+# shellcheck disable=SC2034
+loopX="${device##*/}"
+boot_partition="${device}p1"
+root_partition="${device}p2"
+wait_for_path "$boot_partition"
+wait_for_path "$root_partition"
+
+mkfs.vfat -F 32 -n bootfs "$boot_partition"
+mkfs.ext4 -F -L rootfs "$root_partition"
+mkdir -p "$root_mount" "$boot_mount"
+mount "$root_partition" "$root_mount"
+mount "$boot_partition" "$boot_mount"
+
+log_info "Copying root filesystem"
+rsync -aHAX --numeric-ids --exclude=/boot/ "$rootfs_dir/" "$root_mount/"
+mkdir -p "$root_mount/boot"
+
+log_info "Copying boot filesystem"
+rsync -rtD --delete "$rootfs_dir/boot/" "$boot_mount/"
+generate_extlinux "$boot_mount"
+sync
+
+umount "$boot_mount"
+umount "$root_mount"
+
+INSTALL_U_BOOT
+sync
+losetup -d "$device"
+device=""
+
+rm -f "$output_dir/$name.img" "$output_dir/$name.img.xz" \
+	"$output_dir/$name.img.xz.sha256"
+mv "$image_file" "$output_dir/$name.img"
+log_info "Compressing image with xz"
+xz -T0 -f "$output_dir/$name.img"
+(
+	cd "$output_dir"
+	sha256sum "$name.img.xz" > "$name.img.xz.sha256"
+)
+
+trap - EXIT
+rmdir "$boot_mount" "$root_mount" "$mount_dir" 2>/dev/null || true
+log_info "Image ready: $output_dir/$name.img.xz"

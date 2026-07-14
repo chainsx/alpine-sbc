@@ -1,103 +1,53 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# shellcheck disable=SC2154 # Contract: caller supplies work_dir, board, and jobs.
 
-if [ -z ${atf_url} ];then
-    exit 2
-fi
+[[ -n "${atf_url:-}" ]] || die "Board configuration does not define atf_url."
+[[ -n "${atf_branch:-}" ]] || die "Board configuration does not define atf_branch."
+[[ -n "${atf_plat:-}" ]] || die "Board configuration does not define atf_plat."
+atf_extra_config="${atf_extra_config:-}"
 
-# https://github.com/ARM-software/arm-trusted-firmware
-
-if [ -z ${atf_branch} ];then
-    exit 2
-fi
-
-# lts-v2.10.26
-
-if [ -z ${atf_plat} ];then
-    exit 2
-fi
-
-# qemu
-# STM: stm32mp1, stm32mp2
-# Allwinner: sun50i_a64, sun50i_h6, sun50i_h616, sun50i_r329
-
-if [ -z ${atf_extra_config} ];then
-    atf_extra_config=""
-fi
-
-# TF-A extra build options
+apply_atf_patch_directory() {
+	local directory="$1" patch
+	[[ -d "$directory" ]] || return 0
+	while IFS= read -r -d '' patch; do
+		log_info "Applying TF-A patch: ${patch#"$PROJECT_ROOT"/}"
+		git -C "$work_dir/atf-src" apply --whitespace=nowarn "$patch"
+	done < <(find "$directory" -maxdepth 1 -type f -name '*.patch' -print0 | sort -z)
+}
 
 patch_atf() {
-    pushd ${work_dir}/atf-src
-
-    if [ -d "${work_dir}/../patches/atf/${atf_branch}/generic/patches" ]; then
-        log_info "Applying patches..."
-        for patch in ${work_dir}/../patches/atf/${atf_branch}/generic/patches/*.patch; do
-            log_info "Applying patch: $(basename $patch)"
-            git apply "$patch"
-        done
-    else
-        log_info "No patches directory found. Skipping patching."
-    fi
-
-    if [ -d "${work_dir}/../patches/atf/${atf_branch}/generic/files" ]; then
-        log_info "Applying files..."
-        cp -r ${work_dir}/../patches/atf/${atf_branch}/generic/files/* .
-    else
-        log_info "No files directory found. Skipping patching."
-    fi
-
-    if [ -d "${work_dir}/../patches/atf/${atf_branch}/${board}/patches" ]; then
-        log_info "Applying patches..."
-        for patch in ${work_dir}/../patches/atf/${atf_branch}/${board}/patches/*.patch; do
-            log_info "Applying patch: $(basename $patch)"
-            git apply "$patch"
-        done
-    else
-        log_info "No patches directory found. Skipping patching."
-    fi
-
-    if [ -d "${work_dir}/../patches/atf/${atf_branch}/${board}/files" ]; then
-        log_info "Applying files..."
-        cp -r ${work_dir}/../patches/atf/${atf_branch}/${board}/files/* .
-    else
-        log_info "No files directory found. Skipping patching."
-    fi
-
-    touch .patched
-    
-    popd
+	local patch_root="$PROJECT_ROOT/patches/atf/$atf_branch"
+	apply_atf_patch_directory "$patch_root/generic/patches"
+	copy_tree_contents "$patch_root/generic/files" "$work_dir/atf-src"
+	apply_atf_patch_directory "$patch_root/$board/patches"
+	copy_tree_contents "$patch_root/$board/files" "$work_dir/atf-src"
+	touch "$work_dir/atf-src/.patched"
 }
 
-fetch_atf(){
-    if [ ! -d ${work_dir}/atf-src ];then
-        git clone --depth=1 ${atf_url} -b ${atf_branch} ${work_dir}/atf-src
-    fi
+fetch_atf() {
+	if [[ ! -d "$work_dir/atf-src" ]]; then
+		log_info "Cloning TF-A '$atf_branch' from $atf_url"
+		git clone --depth=1 --branch "$atf_branch" "$atf_url" "$work_dir/atf-src"
+	else
+		log_info "Using cached TF-A source: $work_dir/atf-src"
+	fi
 }
 
-compile_atf(){
-    pushd ${work_dir}/atf-src
-    make -j$(nproc) ARCH=aarch64 PLAT=${atf_plat} ${atf_extra_config}
-    #cp build/${atf_plat}/release/bl31.bin ${work_dir}
-    popd
+compile_atf() {
+	log_info "Building TF-A for $atf_plat"
+	# Board configuration values are trusted make assignments, intentionally split.
+	# shellcheck disable=SC2086
+	make -C "$work_dir/atf-src" -j"$jobs" ARCH=aarch64 PLAT="$atf_plat" $atf_extra_config
 }
 
-mk_stm32mp2_boot_fip(){
-    pushd ${work_dir}/atf-src
-    make -j$(nproc) PLAT=stm32mp2 ARCH=aarch64 ARM_ARCH_MAJOR=8 \
-    LOG_LEVEL=40 DTB_FILE_NAME=${board}.dtb \
-    SPD=opteed STM32MP25=1 \
-	BL32=${work_dir}/optee-src/out/arm-plat-stm32mp2/core/tee-header_v2.bin \
-	BL32_EXTRA1=${work_dir}/optee-src/out/arm-plat-stm32mp2/core/tee-pager_v2.bin \
-	BL32_EXTRA2=${work_dir}/optee-src/out/arm-plat-stm32mp2/core/tee-pageable_v2.bin \
-	BL33=${work_dir}/u-boot/u-boot-nodtb.bin \
-	BL33_CFG=${work_dir}/u-boot/u-boot.dtb \
-	STM32MP_SDMMC=1 STM32MP_LPDDR4_TYPE=1 all fip
-    popd
+mk_stm32mp2_boot_fip() {
+	log_info "Generating STM32MP2 FIP"
+	make -C "$work_dir/atf-src" -j"$jobs" PLAT=stm32mp2 ARCH=aarch64 ARM_ARCH_MAJOR=8 \
+		LOG_LEVEL=40 "DTB_FILE_NAME=$board.dtb" SPD=opteed STM32MP25=1 \
+		"BL32=$work_dir/optee-src/out/arm-plat-stm32mp2/core/tee-header_v2.bin" \
+		"BL32_EXTRA1=$work_dir/optee-src/out/arm-plat-stm32mp2/core/tee-pager_v2.bin" \
+		"BL32_EXTRA2=$work_dir/optee-src/out/arm-plat-stm32mp2/core/tee-pageable_v2.bin" \
+		"BL33=$work_dir/u-boot/u-boot-nodtb.bin" \
+		"BL33_CFG=$work_dir/u-boot/u-boot.dtb" \
+		STM32MP_SDMMC=1 STM32MP_LPDDR4_TYPE=1 all fip
 }
-
-work_dir="$(pwd)/build"
-
-source ${src_dir}/boards/${board}.config
-
-#fetch_atf
-#compile_atf

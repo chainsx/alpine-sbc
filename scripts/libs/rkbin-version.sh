@@ -1,72 +1,62 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# shellcheck disable=SC2154 # Contract: caller supplies work_dir.
 
-if [ -z ${soc} ];then
-    exit 2
-fi
+[[ -n "${soc:-}" ]] || die "Board configuration does not define soc for Rockchip rkbin."
 
 RKBIN_SOURCE_URL="https://github.com/rockchip-linux/rkbin.git"
 RKBIN_SOURCE_VERSION="74213af1e952c4683d2e35952507133b61394862"
 
 case "$soc" in
-            rk3308)
-                atf_bin="bin/rk33/rk3308_bl31_v2.27.elf"
-		        tpl_bin="bin/rk33/rk3308_ddr_589MHz_uart2_m1_v2.10.bin"
-                miniloader_bin="bin/rk33/rk3308_miniloader_v1.43.bin"
-                shift 2
-                ;;
-            rk3328)
-                atf_bin="bin/rk33/rk322xh_bl31_v1.49.elf"
-		        tpl_bin="bin/rk33/rk3328_ddr_333MHz_v1.21.bin"
-		        miniloader_bin="bin/rk33/rk322xh_miniloader_v2.50.bin"
-                shift 2
-                ;;
-            rk3399)
-                atf_bin="bin/rk33/rk3399_bl31_v1.36.elf"
-		        tpl_bin="bin/rk33/rk3399_ddr_800MHz_v1.30.bin"
-		        miniloader_bin="rk3399_miniloader_v1.30.bin"
-                shift 2
-                ;;
-            rk3528)
-                atf_bin="bin/rk35/rk3528_bl31_v1.20.elf"
-		        tpl_bin="bin/rk35/rk3528_ddr_1056MHz_v1.11.bin"
-                shift 2
-                ;;
-            rk3566)
-            	atf_bin="bin/rk35/rk3568_bl31_v1.45.elf"
-		        tpl_bin="bin/rk35/rk3566_ddr_1056MHz_v1.23.bin"
-                shift 2
-                ;;
-            rk3568)
-            	atf_bin="bin/rk35/rk3568_bl31_v1.45.elf"
-		        tpl_bin="bin/rk35/rk3568_ddr_1560MHz_v1.23.bin"
-                shift 2
-                ;;
-            rk3576)
-            	atf_bin="bin/rk35/rk3576_bl31_v1.20.elf"
-		        tpl_bin="bin/rk35/rk3576_ddr_lp4_2112MHz_lp5_2736MHz_v1.09.bin"
-                shift 2
-                ;;
-            rk3588)
-            	atf_bin="bin/rk35/rk3588_bl31_v1.51.elf"
-		        tpl_bin="bin/rk35/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.19.bin"
-                shift 2
-                ;;
-            *)
-                echo "Unknown SOC: $soc"
-                help 2
-                ;;
+	rk3308)
+		atf_bin="bin/rk33/rk3308_bl31_v2.27.elf"
+		tpl_bin="bin/rk33/rk3308_ddr_589MHz_uart2_m1_v2.10.bin"
+		;;
+	rk3328)
+		atf_bin="bin/rk33/rk322xh_bl31_v1.49.elf"
+		tpl_bin="bin/rk33/rk3328_ddr_333MHz_v1.21.bin"
+		;;
+	rk3399)
+		atf_bin="bin/rk33/rk3399_bl31_v1.36.elf"
+		tpl_bin="bin/rk33/rk3399_ddr_800MHz_v1.30.bin"
+		;;
+	rk3528)
+		atf_bin="bin/rk35/rk3528_bl31_v1.20.elf"
+		tpl_bin="bin/rk35/rk3528_ddr_1056MHz_v1.11.bin"
+		;;
+	rk3566)
+		atf_bin="bin/rk35/rk3568_bl31_v1.45.elf"
+		tpl_bin="bin/rk35/rk3566_ddr_1056MHz_v1.23.bin"
+		;;
+	rk3568)
+		atf_bin="bin/rk35/rk3568_bl31_v1.45.elf"
+		tpl_bin="bin/rk35/rk3568_ddr_1560MHz_v1.23.bin"
+		;;
+	rk3576)
+		atf_bin="bin/rk35/rk3576_bl31_v1.20.elf"
+		tpl_bin="bin/rk35/rk3576_ddr_lp4_2112MHz_lp5_2736MHz_v1.09.bin"
+		;;
+	rk3588)
+		atf_bin="bin/rk35/rk3588_bl31_v1.51.elf"
+		tpl_bin="bin/rk35/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.19.bin"
+		;;
+	*) die "Unsupported Rockchip SoC for rkbin: $soc" ;;
 esac
 
-fetch_rkbin(){
-    if [ ! -d ${work_dir}/rkbin ];then
-        git clone ${RKBIN_SOURCE_URL} ${work_dir}/rkbin
-
-        pushd ${work_dir}/rkbin
-        git checkout ${RKBIN_SOURCE_VERSION}
-        popd
-    else
-        echo "rkbin source found, skip clone."
-    fi
+fetch_rkbin() {
+	local directory="$work_dir/rkbin"
+	if [[ -d "$directory" ]]; then
+		local revision
+		revision="$(git -C "$directory" rev-parse HEAD 2>/dev/null || true)"
+		if [[ "$revision" != "$RKBIN_SOURCE_VERSION" ]]; then
+			log_warn "Replacing rkbin checkout at unexpected revision: ${revision:-unknown}"
+			safe_remove_tree "$directory"
+		fi
+	fi
+	if [[ ! -d "$directory" ]]; then
+		log_info "Fetching pinned Rockchip rkbin revision $RKBIN_SOURCE_VERSION"
+		git clone --filter=blob:none "$RKBIN_SOURCE_URL" "$directory"
+		git -C "$directory" -c advice.detachedHead=false checkout "$RKBIN_SOURCE_VERSION"
+	fi
+	[[ -f "$directory/$tpl_bin" ]] || die "rkbin TPL not found: $tpl_bin"
+	[[ -f "$directory/$atf_bin" ]] || die "rkbin BL31 not found: $atf_bin"
 }
-
-#fetch_rkbin

@@ -1,205 +1,140 @@
-#!/bin/bash
-set -e
-set -x
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-__usage="
-Usage: build_u-boot [OPTIONS]
-Build u-boot image.
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/libs/common.sh
+source "$PROJECT_ROOT/scripts/libs/common.sh"
 
-Options: 
-  --board, BOARD_CONFIG     Required! The config of target board in the boards folder.
-  -h, --help                Show command help.
-"
+usage() {
+	cat <<'EOF'
+Usage: scripts/mkbootloader.sh --board NAME [--jobs N] [--force-fetch]
 
-help()
-{
-    echo "$__usage"
-    exit $1
+Fetch, patch, and build U-Boot plus board-specific firmware components.
+EOF
 }
 
-log_info() { echo -e "\033[32m[INFO] $1\033[0m"; }
-log_warn() { echo -e "\033[33m[WARN] $1\033[0m"; }
-log_err() { echo -e "\033[31m[ERR] $1\033[0m"; }
+board=""
+jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')"
+force_fetch=0
+arch=""
+bootloader_url=""
+bootloader_branch=""
+bootloader_config=""
+while (($#)); do
+	case "$1" in
+		--board | --jobs)
+			require_arg_value "$1" "${2:-}"
+			case "$1" in --board) board="$2" ;; --jobs) jobs="$2" ;; esac
+			shift 2
+			;;
+		--force-fetch) force_fetch=1; shift ;;
+		-h | --help) usage; exit 0 ;;
+		*) die "Unknown option: $1" ;;
+	esac
+done
+[[ -n "$board" ]] || die "--board is required."
+[[ "$jobs" =~ ^[1-9][0-9]*$ ]] || die "--jobs must be a positive integer."
 
-default_param() {
-    work_dir="$(pwd)/build"
-    bootloader_url="https://github.com/u-boot/u-boot.git"
-    log_dir=${work_dir}/log
+init_logging bootloader
+enable_error_trap
+load_board_config "$board"
+require_board_variables arch platform bootloader_url bootloader_branch bootloader_config
+[[ "$(normalize_arch "$arch")" == arm64 ]] || die "Only arm64 bootloader targets are supported."
+[[ "$(normalize_arch "$(uname -m)")" == arm64 ]] || die "Bootloader builds require an arm64 host."
+require_commands find git make gcc python3 sha256sum sort
+
+# Compatibility variables used by the sourced board-support libraries.
+# shellcheck disable=SC2034
+src_dir="$PROJECT_ROOT"
+# shellcheck disable=SC2034
+work_dir="$WORK_DIR"
+# shellcheck disable=SC2034
+log_dir="$LOG_DIR"
+
+uboot_dir="$WORK_DIR/u-boot"
+source_state="$uboot_dir/.alpine-sbc-source"
+patch_root="$PROJECT_ROOT/patches/u-boot/$bootloader_branch"
+expected_state="url=$bootloader_url
+ref=$bootloader_branch
+board=$board
+patches=$(tree_fingerprint "$patch_root")"
+
+fetch_uboot() {
+	local replace=0
+	if (( force_fetch )); then
+		replace=1
+	elif [[ -d "$uboot_dir" ]] && { [[ ! -f "$source_state" ]] \
+		|| [[ "$(cat "$source_state")" != "$expected_state" ]]; }; then
+		replace=1
+	fi
+	if (( replace )); then safe_remove_tree "$uboot_dir"; fi
+	if [[ ! -d "$uboot_dir" ]]; then
+		log_info "Cloning U-Boot '$bootloader_branch' from $bootloader_url"
+		git clone --depth=1 --branch "$bootloader_branch" "$bootloader_url" "$uboot_dir"
+	else
+		log_info "Using cached U-Boot source: $uboot_dir"
+	fi
 }
 
-parseargs()
-{
-    if [ "x$#" == "x0" ]; then
-        return 0
-    fi
-
-    while [ "x$#" != "x0" ];
-    do
-        case "$1" in
-            --board)
-                board="$2"
-                shift 2
-                ;;
-            --help|-h)
-                help 0
-                ;;
-            *)
-                log_err "Unknown parameter: $1"
-                help 2
-                ;;
-        esac
-    done
+apply_patch_directory() {
+	local directory="$1" patch
+	[[ -d "$directory" ]] || return 0
+	while IFS= read -r -d '' patch; do
+		log_info "Applying U-Boot patch: ${patch#"$PROJECT_ROOT"/}"
+		git -C "$uboot_dir" apply --whitespace=nowarn "$patch"
+	done < <(find "$directory" -maxdepth 1 -type f -name '*.patch' -print0 | sort -z)
 }
 
-buildid=$(date +%Y%m%d%H%M%S)
-builddate=${buildid:0:8}
-
-ERROR(){
-    echo `date` - ERROR, $* | tee -a ${log_dir}/${builddate}.log
+patch_uboot() {
+	[[ -f "$source_state" ]] && return 0
+	apply_patch_directory "$patch_root/generic/patches"
+	copy_tree_contents "$patch_root/generic/files" "$uboot_dir"
+	apply_patch_directory "$patch_root/$board/patches"
+	copy_tree_contents "$patch_root/$board/files" "$uboot_dir"
+	printf '%s\n' "$expected_state" > "$source_state"
 }
 
-LOG(){
-    echo `date` - INFO, $* | tee -a ${log_dir}/${builddate}.log
-}
+fetch_uboot
+patch_uboot
 
-
-
-fetch_u-boot() {
-    pushd ${work_dir}
-    if [ -d ${work_dir}/u-boot ];then
-        pushd ${work_dir}/u-boot
-        remote_url_exist=`git remote -v | grep "origin"`
-        remote_url=`git ls-remote --get-url origin`
-        popd
-        if [[ ${remote_url_exist} = "" || ${remote_url} != ${bootloader_url} ]]; then
-            rm -rf ${work_dir}/u-boot
-            git clone --depth=1 -b ${bootloader_branch} ${bootloader_url}
-            if [[ $? -eq 0 ]]; then
-                LOG "clone u-boot done."
-            else
-                ERROR "clone u-boot failed."
-                exit 1
-            fi
-        fi
-    else
-        git clone --depth=1 -b ${bootloader_branch} ${bootloader_url} u-boot
-        LOG "clone u-boot done."
-    fi
-    popd
-}
-
-patch_u-boot() {
-    pushd ${work_dir}/u-boot
-
-    if [ -d "${work_dir}/../patches/u-boot/${bootloader_branch}/generic/patches" ]; then
-        log_info "Applying patches..."
-        for patch in ${work_dir}/../patches/u-boot/${bootloader_branch}/generic/patches/*.patch; do
-            log_info "Applying patch: $(basename $patch)"
-            git apply "$patch"
-        done
-    else
-        log_info "No patches directory found. Skipping patching."
-    fi
-
-    if [ -d "${work_dir}/../patches/u-boot/${bootloader_branch}/generic/files" ]; then
-        log_info "Applying files..."
-        cp -r ${work_dir}/../patches/u-boot/${bootloader_branch}/generic/files/* .
-    else
-        log_info "No files directory found. Skipping patching."
-    fi
-
-    if [ -d "${work_dir}/../patches/u-boot/${bootloader_branch}/${board}/patches" ]; then
-        log_info "Applying patches..."
-        for patch in ${work_dir}/../patches/u-boot/${bootloader_branch}/${board}/patches/*.patch; do
-            log_info "Applying patch: $(basename $patch)"
-            git apply "$patch"
-        done
-    else
-        log_info "No patches directory found. Skipping patching."
-    fi
-
-    if [ -d "${work_dir}/../patches/u-boot/${bootloader_branch}/${board}/files" ]; then
-        log_info "Applying files..."
-        cp -r ${work_dir}/../patches/u-boot/${bootloader_branch}/${board}/files/* .
-    else
-        log_info "No files directory found. Skipping patching."
-    fi
-
-    touch .patched
-    
-    popd
-}
-
-compile_u-boot() {
-    pushd ${work_dir}/u-boot
-    make ${bootloader_config}
-    make ${uboot_extra_config} -j$(nproc)
-    LOG "make u-boot done."
-    popd
-
-}
-
-set -e
-src_dir=$(pwd)
-default_param
-parseargs "$@" || help $?
-
-if [ ! -d ${work_dir} ]; then
-    mkdir ${work_dir}
+uboot_extra_config="${uboot_extra_config:-}"
+if [[ "${atf_compile:-no}" == no && "${rkbin:-no}" == yes ]]; then
+	# shellcheck source=scripts/libs/rkbin-version.sh
+	source "$PROJECT_ROOT/scripts/libs/rkbin-version.sh"
+	fetch_rkbin
+	# shellcheck disable=SC2154
+	uboot_extra_config="ROCKCHIP_TPL=$WORK_DIR/rkbin/$tpl_bin BL31=$WORK_DIR/rkbin/$atf_bin"
 fi
 
-source ${src_dir}/boards/${board}.config
-
-if [ ! -d ${log_dir} ];then mkdir -p ${log_dir}; fi
-
-host_arch=$(arch)
-
-if [[ "${host_arch}" == "x86_64" && "${arch}" == "arm64" ]];then
-    LOG "You are running this script on a ${host_arch} mechine, use cross compile...."
-    export CROSS_COMPILE="aarch64-linux-gnu-"
-else
-    LOG "You are running this script on a ${host_arch} mechine, progress...."
+if [[ "${atf_compile:-no}" == yes ]]; then
+	# shellcheck source=scripts/libs/atf-compile.sh
+	source "$PROJECT_ROOT/scripts/libs/atf-compile.sh"
+	fetch_atf
+	[[ -f "$WORK_DIR/atf-src/.patched" ]] || patch_atf
+	compile_atf
 fi
 
-if [[ ${atf_compile} == "no" && ${rkbin} == "yes" ]];then
-    source ${src_dir}/scripts/libs/rkbin-version.sh
-    fetch_rkbin
+log_info "Configuring U-Boot with $bootloader_config"
+make -C "$uboot_dir" "$bootloader_config"
+# Board configuration values are trusted make assignments, intentionally split.
+# shellcheck disable=SC2086
+make -C "$uboot_dir" -j"$jobs" $uboot_extra_config
 
-    uboot_extra_config="ROCKCHIP_TPL=${work_dir}/rkbin/${tpl_bin} BL31=${work_dir}/rkbin/${atf_bin}"
+if [[ "${optee_compile:-no}" == yes ]]; then
+	# shellcheck source=scripts/libs/optee-compile.sh
+	source "$PROJECT_ROOT/scripts/libs/optee-compile.sh"
+	fetch_optee
+	compile_optee
 fi
 
-if [[ ${atf_compile} == "yes" ]];then
-    source ${src_dir}/scripts/libs/atf-compile.sh
-    fetch_atf
-    if [ ! -f ${work_dir}/atf-src/.patched ];then
-        patch_atf
-    fi
-    compile_atf
+if [[ "${atf_compile:-no}" == yes && "${stm32mp2_boot_fip:-no}" == yes ]]; then
+	mk_stm32mp2_boot_fip
+fi
+if [[ "${atf_compile:-no}" == no && "${amlogic_boot_fip:-no}" == yes ]]; then
+	# shellcheck source=scripts/libs/amlogic-boot-fip.sh
+	source "$PROJECT_ROOT/scripts/libs/amlogic-boot-fip.sh"
+	fetch_aml_fip
+	mk_amlogic_fip
 fi
 
-LOG "build u-boot..."
-
-fetch_u-boot
-
-if [ ! -f ${work_dir}/u-boot/.patched ];then
-    patch_u-boot
-fi
-
-compile_u-boot
-
-if [[ ${optee_compile} == "yes" ]];then
-    source ${src_dir}/scripts/libs/optee-compile.sh
-    fetch_optee
-    compile_optee
-fi
-
-if [[ ${atf_compile} == "yes" && ${stm32mp2_boot_fip} == "yes" ]];then
-    source ${src_dir}/scripts/libs/atf-compile.sh
-    mk_stm32mp2_boot_fip
-fi
-
-if [[ ${atf_compile} == "no" && ${amlogic_boot_fip} == "yes" ]];then
-    source ${src_dir}/scripts/libs/amlogic-boot-fip.sh
-    fetch_aml_fip
-    mk_amlogic_fip
-fi
+log_info "Bootloader build complete: $uboot_dir"

@@ -1,176 +1,274 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-__usage="
-Usage: mkrootfs [OPTIONS]
-Build Rootfs rootfs.
-Run in root user.
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/libs/common.sh
+source "$PROJECT_ROOT/scripts/libs/common.sh"
 
-Options: 
-  --mirror MIRROR_ADDR         The URL/path of target mirror address.
-  --rootfs ROOTFS_DIR          The directory name of rootfs rootfs.
-  --version ROOTFS_VER         The version of alpine.
-  --arch ROOTFS_ARCH
-  --help                       Show command help.
-"
+usage() {
+	cat <<'EOF'
+Usage: scripts/mkrootfs.sh --board NAME [options]
 
-help()
-{
-    echo "$__usage"
-    exit $1
+Options:
+  --board NAME       Board configuration name
+  --rootfs DIR       Destination (default: build/rootfs)
+  --version VERSION  Alpine release with patch component (default: 3.23.0)
+  --arch ARCH        Alpine architecture (default: aarch64)
+  --mirror URL       Alpine mirror root
+  --keep-rootfs      Update an existing rootfs instead of recreating it
+  -h, --help         Show this help
+EOF
 }
 
-default_param() {
-    ROOTFS="rootfs"
-    VERSION="3.22"
-    ARCH="aarch64"
-    MIRROR="https://dl-cdn.alpinelinux.org"
+board=""
+rootfs="$WORK_DIR/rootfs"
+version=3.23.0
+apk_arch=aarch64
+mirror=https://dl-cdn.alpinelinux.org
+keep_rootfs=0
+kernel_flavor=""
+KERNEL_FLAVOR=""
+KERNEL_PACKAGE=""
+KERNEL_PKGVER=""
+KERNEL_PKGREL=""
+KERNEL_ABI_RELEASE=""
+KERNEL_REPOSITORY=""
+KERNEL_PUBLIC_KEY=""
+platform=""
+rootfs_arch=""
+
+while (($#)); do
+	case "$1" in
+		--board | --rootfs | --version | --arch | --mirror)
+			require_arg_value "$1" "${2:-}"
+			case "$1" in
+				--board) board="$2" ;;
+				--rootfs) rootfs="$2" ;;
+				--version) version="$2" ;;
+				--arch) apk_arch="$2" ;;
+				--mirror) mirror="${2%/}" ;;
+			esac
+			shift 2
+			;;
+		--keep-rootfs) keep_rootfs=1; shift ;;
+		-h | --help) usage; exit 0 ;;
+		*) die "Unknown option: $1" ;;
+	esac
+done
+
+[[ -n "$board" ]] || die "--board is required."
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Invalid Alpine release: $version"
+[[ "$apk_arch" == aarch64 ]] || die "Only the aarch64 root filesystem is supported."
+[[ "$rootfs" == "$WORK_DIR"/* ]] || die "Rootfs must be located below $WORK_DIR."
+
+init_logging rootfs
+enable_error_trap
+require_root
+require_commands wget sha256sum tar chroot mount mountpoint umount rsync
+load_board_config "$board"
+require_board_variables platform rootfs_arch
+[[ "$rootfs_arch" == "$apk_arch" ]] \
+	|| die "Board rootfs_arch '$rootfs_arch' does not match requested '$apk_arch'."
+
+package_manifest="$WORK_DIR/packages/kernel-packages.env"
+[[ -f "$package_manifest" ]] || die "Kernel package manifest is missing; build the kernel packages first."
+# shellcheck disable=SC1090
+source "$package_manifest"
+[[ "$KERNEL_FLAVOR" == "$kernel_flavor" ]] || die "Kernel packages do not match board '$board'."
+[[ -d "$KERNEL_REPOSITORY" && -f "$KERNEL_REPOSITORY/APKINDEX.tar.gz" ]] \
+	|| die "Signed kernel repository is incomplete: $KERNEL_REPOSITORY"
+[[ -f "$KERNEL_PUBLIC_KEY" ]] || die "Kernel repository public key is missing: $KERNEL_PUBLIC_KEY"
+
+release_branch="v${version%.*}"
+archive="alpine-minirootfs-$version-$apk_arch.tar.gz"
+download_dir="$WORK_DIR/downloads"
+archive_path="$download_dir/$archive"
+archive_url="$mirror/alpine/$release_branch/releases/$apk_arch/$archive"
+
+mounts=()
+cleanup_mounts() {
+	local index
+	set +e
+	for ((index=${#mounts[@]} - 1; index >= 0; index--)); do
+		mountpoint -q "${mounts[index]}" && umount -R "${mounts[index]}"
+	done
+	set -e
+}
+trap cleanup_mounts EXIT
+
+download_rootfs() {
+	mkdir -p "$download_dir"
+	if [[ ! -f "$archive_path" ]]; then
+		log_info "Downloading $archive_url"
+		wget -O "$archive_path.part" "$archive_url"
+		mv "$archive_path.part" "$archive_path"
+	else
+		log_info "Using cached minirootfs: $archive_path"
+	fi
+
+	log_info "Verifying minirootfs SHA-256 checksum"
+	if wget -q -O "$archive_path.sha256" "$archive_url.sha256"; then
+		(
+			cd "$download_dir"
+			sha256sum -c "$archive.sha256"
+		)
+	else
+		rm -f "$archive_path.sha256"
+		die "The mirror did not provide $archive.sha256; refusing an unverified rootfs archive."
+	fi
 }
 
-parseargs()
-{
-    if [ "x$#" == "x0" ]; then
-        return 0
-    fi
-
-    while [ "x$#" != "x0" ];
-    do
-        case "$1" in
-            --mirror)
-                MIRROR="$2"
-                shift 2
-                ;;
-            --rootfs)
-                ROOTFS="$2"
-                shift 2
-                ;;
-            --version)
-                VERSION="$2"
-                shift 2
-                ;;
-            --arch)
-                ARCH="$2"
-                shift 2
-                ;;
-            --help|-h)
-                help 0
-                ;;
-            *)
-                log_err "Unknown parameter: $1"
-                help 2
-                ;;
-        esac
-    done
+extract_rootfs() {
+	if (( keep_rootfs )) && [[ -f "$rootfs/etc/alpine-release" ]]; then
+		log_info "Updating existing rootfs: $rootfs"
+		return
+	fi
+	[[ ! -e "$rootfs" ]] || safe_remove_tree "$rootfs"
+	mkdir -p "$rootfs"
+	log_info "Extracting Alpine minirootfs $version ($apk_arch)"
+	tar -xzf "$archive_path" -C "$rootfs" --numeric-owner
 }
 
-get_minirootfs() {
-    if [ ! -d ${ROOTFS} ];then
-      mkdir ${ROOTFS}
-    fi
-
-    major=$(echo "${VERSION}" | cut -d. -f1)
-    minor=$(echo "${VERSION}" | cut -d. -f2)
-    patch=$(echo "${VERSION}" | cut -d. -f3)
-
-    echo "Major: $major"
-    echo "Minor: $minor"
-    echo "Patch: $patch"
-
-    echo "Downloading ${MIRROR}/alpine/v${major}.${minor}/releases/${ARCH}/alpine-minirootfs-${VERSION}-${ARCH}.tar.gz ..."
-    
-    wget "${MIRROR}/alpine/v${major}.${minor}/releases/${ARCH}/alpine-minirootfs-${VERSION}-${ARCH}.tar.gz"
-    
-    if [ $? -ne 0 ]; then
-        echo "Failed to download minirootfs from ${MIRROR}"
-        exit 2
-    fi
-
-    tar -zxvf "alpine-minirootfs-${VERSION}-${ARCH}.tar.gz" \
-    -C ${ROOTFS}
-    
-    rm "alpine-minirootfs-${VERSION}-${ARCH}.tar.gz"
+mount_chroot_filesystems() {
+	mkdir -p "$rootfs/dev" "$rootfs/proc" "$rootfs/sys" "$rootfs/run"
+	mount --rbind /dev "$rootfs/dev"
+	mounts+=("$rootfs/dev")
+	mount --make-rslave "$rootfs/dev"
+	mount -t proc proc "$rootfs/proc"
+	mounts+=("$rootfs/proc")
+	mount --rbind /sys "$rootfs/sys"
+	mounts+=("$rootfs/sys")
+	mount --make-rslave "$rootfs/sys"
+	mount -t tmpfs tmpfs "$rootfs/run"
+	mounts+=("$rootfs/run")
 }
 
-init_rootfs() {
-    cp -b /etc/resolv.conf ${ROOTFS}/etc/resolv.conf
+configure_repositories() {
+	mkdir -p "$rootfs/etc/apk/keys"
+	cp /etc/resolv.conf "$rootfs/etc/resolv.conf"
+	cat > "$rootfs/etc/apk/repositories" <<EOF
+$mirror/alpine/$release_branch/main
+$mirror/alpine/$release_branch/community
+EOF
+	cp "$KERNEL_PUBLIC_KEY" "$rootfs/etc/apk/keys/"
 
-    sed -i "s|https|http|g" ${ROOTFS}/etc/apk/repositories
-    
-    cat <<EOF | chroot ${ROOTFS} sh
-apk update
-apk add bash
+	rm -rf "$rootfs/tmp/alpine-sbc-repository"
+	mkdir -p "$rootfs/tmp/alpine-sbc-repository"
+	cp "$KERNEL_REPOSITORY"/*.apk "$KERNEL_REPOSITORY/APKINDEX.tar.gz" \
+		"$rootfs/tmp/alpine-sbc-repository/"
+}
+
+kernel_firmware_packages="${kernel_firmware_packages:-}"
+if [[ -z "$kernel_firmware_packages" ]]; then
+	case "$platform" in
+		rockchip64) kernel_firmware_packages="linux-firmware-rockchip" ;;
+		amlogic) kernel_firmware_packages="linux-firmware-amlogic" ;;
+		qemu | stm32mp2) kernel_firmware_packages="linux-firmware-none" ;;
+		*) kernel_firmware_packages="linux-firmware-other" ;;
+	esac
+fi
+
+base_packages=(
+	alpine-base bash bash-completion btop busybox-mdev-openrc busybox-openrc
+	busybox-suid coreutils dhcpcd mdev-conf networkmanager networkmanager-bluetooth
+	networkmanager-cli networkmanager-dnsmasq networkmanager-openrc networkmanager-tui
+	networkmanager-wifi openrc openrc-bash-completion openrc-init openssh
+	openssh-server-common-openrc sudo tzdata util-linux vim
+)
+
+install_packages() {
+	log_info "Installing base system packages"
+	chroot "$rootfs" apk update
+	chroot "$rootfs" apk add --no-cache "${base_packages[@]}"
+	# Board configuration values are trusted package names, intentionally split.
+	# shellcheck disable=SC2086
+	chroot "$rootfs" apk add --no-cache $kernel_firmware_packages
+
+	log_info "Installing signed custom kernel package: $KERNEL_PACKAGE"
+	chroot "$rootfs" apk add --no-cache \
+		--repository /tmp/alpine-sbc-repository "$KERNEL_PACKAGE"
+
+	chroot "$rootfs" apk info --exists "$KERNEL_PACKAGE=$KERNEL_PKGVER-r$KERNEL_PKGREL" \
+		|| die "The requested kernel package version was not installed."
+
+	# Installation already invokes Alpine's mkinitfs trigger.  Generate once more
+	# explicitly so trigger failures and stale images from --keep-rootfs are visible.
+	chroot "$rootfs" mkinitfs -o "/boot/initramfs-$KERNEL_FLAVOR" "$KERNEL_ABI_RELEASE"
+	[[ -s "$rootfs/boot/initramfs-$KERNEL_FLAVOR" ]] || die "Initramfs generation failed."
+}
+
+enable_service() {
+	local service="$1" runlevel="$2"
+	if chroot "$rootfs" rc-service -e "$service" >/dev/null 2>&1; then
+		chroot "$rootfs" rc-update add "$service" "$runlevel"
+	else
+		log_warn "OpenRC service is unavailable and was not enabled: $service"
+	fi
+}
+
+configure_system() {
+	log_info "Configuring OpenRC and base system"
+	enable_service devfs sysinit
+	enable_service procfs sysinit
+	enable_service sysfs sysinit
+	enable_service mdev sysinit
+	enable_service modules boot
+	enable_service local default
+	enable_service sshd default
+	enable_service networkmanager default
+
+	mkdir -p "$rootfs/etc/network" "$rootfs/etc/local.d" "$rootfs/root"
+	cat > "$rootfs/etc/network/interfaces" <<'EOF'
+auto lo
+iface lo inet loopback
 EOF
 
-}
-
-PKG_LISTS="openrc openrc-bash-completion alpine-base vim \
-           openrc-init busybox-openrc busybox-mdev-openrc \
-           busybox-suid openssh-server-common-openrc sudo \
-           util-linux btop bash-completion openssh tzdata coreutils \
-           dhcpcd mdev-conf networkmanager networkmanager-openrc \
-           networkmanager-cli networkmanager-tui networkmanager-wifi \
-           networkmanager-bluetooth networkmanager-dnsmasq"
-
-install_pkgs(){
-    for pkg in ${PKG_LISTS}; do
-        echo "Installing package: ${pkg} ..."
-        chroot ${ROOTFS} apk add ${pkg}
-        if [ $? -ne 0 ]; then
-            echo "Failed to install package: ${pkg}"
-            exit 3
-        fi
-    done
-}
-
-config_rootfs(){
-    chroot ${ROOTFS} rc-update add devfs sysinit
-    chroot ${ROOTFS} rc-update add procfs sysinit
-    chroot ${ROOTFS} rc-update add sysfs sysinit
-
-    chroot ${ROOTFS} rc-update add mdev sysinit
-
-    mkdir -p ${ROOTFS}/etc/network
-
-    echo "auto lo" > ${ROOTFS}/etc/network/interfaces
-    echo "iface lo inet loopback" >> ${ROOTFS}/etc/network/interfaces
-
-    chroot ${ROOTFS} rc-update add networking boot
-    chroot ${ROOTFS} rc-update add modules boot
-
-    mkdir -p ${ROOTFS}/etc/local.d
-    cat > ${ROOTFS}/etc/local.d/load_modules.start << 'EOF'
+	cat > "$rootfs/etc/local.d/load-modules.start" <<'EOF'
 #!/bin/sh
 echo "Scanning hardware drivers..."
 mdev -s
-find /sys -name modalias -type f -exec cat '{}' + | sort -u | xargs -n1 modprobe -b -q 2>/dev/null
+find /sys -name modalias -type f -exec cat '{}' + 2>/dev/null \
+	| sort -u | xargs -r -n1 modprobe -b -q 2>/dev/null || true
 EOF
-    chmod +x ${ROOTFS}/etc/local.d/load_modules.start
-    chroot ${ROOTFS} rc-update add local default
+	chmod 755 "$rootfs/etc/local.d/load-modules.start"
 
-    echo "alpine" > ${ROOTFS}/etc/hostname
+	printf '%s\n' alpine-sbc > "$rootfs/etc/hostname"
+	ln -sfn /usr/share/zoneinfo/Asia/Singapore "$rootfs/etc/localtime"
+	printf '%s\n' Asia/Singapore > "$rootfs/etc/timezone"
 
-    sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' ${ROOTFS}/etc/ssh/sshd_config
-    sed -i 's/#PasswordAuthentication.*/PasswordAuthentication yes/' ${ROOTFS}/etc/ssh/sshd_config
-    chroot ${ROOTFS} rc-update add sshd default
+	sed -i -E \
+		-e 's/^[#[:space:]]*PermitRootLogin.*/PermitRootLogin prohibit-password/' \
+		-e 's/^[#[:space:]]*PasswordAuthentication.*/PasswordAuthentication no/' \
+		"$rootfs/etc/ssh/sshd_config"
+	if [[ -n "${ALPINE_SBC_ROOT_PASSWORD:-}" ]]; then
+		printf 'root:%s\n' "$ALPINE_SBC_ROOT_PASSWORD" | chroot "$rootfs" chpasswd
+		log_info "Configured the requested root console password"
+	else
+		chroot "$rootfs" passwd -d root >/dev/null
+		log_warn "Root has no console password; SSH password authentication remains disabled"
+	fi
 
-    cp ${ROOTFS}/usr/share/zoneinfo/Asia/Shanghai ${ROOTFS}/etc/localtime
-    echo "Asia/Shanghai" > ${ROOTFS}/etc/timezone
-
-    sed -i 's/\/bin\/ash/\/bin\/bash/g' ${ROOTFS}/etc/passwd
-
-    cat <<EOF | chroot ${ROOTFS} passwd root
-1234
-1234
+	cat > "$rootfs/etc/fstab" <<'EOF'
+LABEL=rootfs  /      ext4  defaults,noatime  0 1
+LABEL=bootfs  /boot  vfat  defaults          0 2
 EOF
 
-    #chroot ${ROOTFS} depmod -a
+	cat > "$rootfs/etc/alpine-sbc-release" <<EOF
+BOARD=$board
+KERNEL_FLAVOR=$KERNEL_FLAVOR
+KERNEL_RELEASE=$KERNEL_ABI_RELEASE
+EOF
 
-    rm -rf ${ROOTFS}/var/cache/apk/*
+	rm -rf "$rootfs/tmp/alpine-sbc-repository" "$rootfs/var/cache/apk"/*
 }
 
-default_param
-parseargs "$@" || help $?
-
-get_minirootfs
-init_rootfs
-install_pkgs
-config_rootfs
+download_rootfs
+extract_rootfs
+mount_chroot_filesystems
+configure_repositories
+install_packages
+configure_system
+cleanup_mounts
+mounts=()
+trap - EXIT
+log_info "Root filesystem ready: $rootfs"
