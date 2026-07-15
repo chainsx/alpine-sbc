@@ -15,7 +15,7 @@ board against one explicit configuration contract.
   `util-linux-dev` to match Alpine's current U-Boot build dependencies.
 - Made `initrd=yes`, kernel flavor/revision, serial settings, boot layout, and
   all other boot-critical fields explicit and validated for every board.
-- Validated bootloader checksums, all three kernel APKs, the signed repository,
+- Validated bootloader checksums, all four kernel APKs, the signed repository,
   and rootfs board/kernel metadata whenever a build stage is reused.
 - Made every generated kernel APK package function create its abuild output
   directory before copying the staged kernel, development, or documentation tree.
@@ -47,6 +47,9 @@ board against one explicit configuration contract.
   console-driver checks, built-in rootfs/devtmpfs checks, and staged-DTB checks.
 - Extended CI/static tests to cover all board configs, boot config rendering,
   EFI QEMU commands, STM32MP2 partition/install rules, and kernel package layout.
+- Generated a board-kernel-matched `linux-headers` APK with Alpine's sanitized
+  UAPI export process, made `linux-<flavor>-dev` depend on its exact version,
+  and installed it in every generated rootfs by default.
 
 ## Verification performed
 

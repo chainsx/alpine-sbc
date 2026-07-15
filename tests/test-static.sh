@@ -205,8 +205,10 @@ bash -n "$rendered_apkbuild"
 	source "$rendered_apkbuild"
 	[[ "$pkgname" == linux-sbc-test-board ]] || fail "rendered kernel package name"
 	[[ "$subpackages" == *linux-sbc-test-board-dev:_dev* ]] || fail "rendered dev subpackage"
+	[[ "$subpackages" == *linux-headers:_headers* ]] || fail "rendered linux-headers subpackage"
 	[[ "$depends" == *initramfs-generator* ]] || fail "rendered initramfs dependency"
-	[[ "$_depends_dev" == *linux-headers* ]] || fail "rendered linux-headers dependency"
+	[[ "$_depends_dev" == *linux-headers=6.12.1-r0* ]] \
+		|| fail "rendered linux-headers dependency is not version-locked"
 )
 
 # Exercise the generated package functions with the same initially absent
@@ -215,11 +217,14 @@ package_test_dir="$(mktemp -d)"
 mkdir -p \
 	"$package_test_dir/start/kernel-bin/lib/modules/6.12.1-0-sbc-test-board" \
 	"$package_test_dir/start/kernel-dev-bin/usr/src/linux-headers-6.12.1-0-sbc-test-board" \
-	"$package_test_dir/start/kernel-doc-bin/usr/share/doc/linux-test"
+	"$package_test_dir/start/kernel-doc-bin/usr/share/doc/linux-test" \
+	"$package_test_dir/start/kernel-headers-bin/usr/include/linux"
 touch \
 	"$package_test_dir/start/kernel-bin/kernel.marker" \
 	"$package_test_dir/start/kernel-dev-bin/dev.marker" \
 	"$package_test_dir/start/kernel-doc-bin/doc.marker"
+printf '#define LINUX_VERSION_CODE 0\n' \
+	> "$package_test_dir/start/kernel-headers-bin/usr/include/linux/version.h"
 (
 	# shellcheck disable=SC1090
 	source "$rendered_apkbuild"
@@ -235,7 +240,18 @@ touch \
 	subpkgdir="$package_test_dir/pkg/doc"
 	_doc
 	[[ -f "$subpkgdir/doc.marker" ]] || fail "kernel doc function did not populate subpkgdir"
+	subpkgdir="$package_test_dir/pkg/headers"
+	_headers
+	[[ -f "$subpkgdir/usr/include/linux/version.h" ]] \
+		|| fail "linux-headers function did not populate subpkgdir"
 )
+
+rg -Fq 'make -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch"' scripts/mklinux.sh \
+	|| fail "linux-headers is not generated from the configured kernel build"
+rg -Fq 'AWK="${AWK:-mawk}" headers' scripts/mklinux.sh \
+	|| fail "linux-headers does not use the kernel headers target"
+rg -Fq "find \"\$include_dir\" ! -iname '*.h' -type f -delete" scripts/mklinux.sh \
+	|| fail "linux-headers does not purge non-header UAPI output"
 
 # Exercise the cache validators used by all --skip-* build paths.
 manifest_test_dir="$(mktemp -d)"
@@ -245,13 +261,15 @@ validate_bootloader_manifest "$manifest_test_dir/bootloader.sha256"
 mkdir -p "$manifest_test_dir/repository"
 printf 'index\n' > "$manifest_test_dir/repository/APKINDEX.tar.gz"
 printf 'key\n' > "$manifest_test_dir/repository/alpine-sbc.rsa.pub"
-for package_name in linux-sbc-test-board linux-sbc-test-board-dev linux-sbc-test-board-doc; do
+for package_name in linux-sbc-test-board linux-sbc-test-board-dev \
+	linux-sbc-test-board-doc linux-headers; do
 	printf 'apk\n' > "$manifest_test_dir/repository/$package_name-6.12.1-r0.apk"
 done
 cat > "$manifest_test_dir/kernel-packages.env" <<EOF
 KERNEL_PACKAGE='linux-sbc-test-board'
 KERNEL_DEV_PACKAGE='linux-sbc-test-board-dev'
 KERNEL_DOC_PACKAGE='linux-sbc-test-board-doc'
+KERNEL_HEADERS_PACKAGE='linux-headers'
 KERNEL_FLAVOR='sbc-test-board'
 KERNEL_PKGVER='6.12.1'
 KERNEL_PKGREL='0'
@@ -265,12 +283,15 @@ load_kernel_package_manifest "$manifest_test_dir/kernel-packages.env" sbc-test-b
 mkdir -p "$manifest_test_dir/rootfs"
 stage_apk_repository "$manifest_test_dir/repository" "$manifest_test_dir/rootfs" \
 	/tmp/alpine-sbc-repository aarch64
-for repository_file in APKINDEX.tar.gz linux-sbc-test-board-6.12.1-r0.apk; do
+for repository_file in APKINDEX.tar.gz linux-sbc-test-board-6.12.1-r0.apk \
+	linux-headers-6.12.1-r0.apk; do
 	[[ -s "$manifest_test_dir/rootfs/tmp/alpine-sbc-repository/aarch64/$repository_file" ]] \
 		|| fail "staged APK repository is missing aarch64/$repository_file"
 done
 rg -Fq -- '--repository "$rootfs_kernel_repository"' scripts/mkrootfs.sh \
 	|| fail "rootfs package installation does not use the staged repository root"
+rg -Fq '"$KERNEL_HEADERS_PACKAGE=$KERNEL_PKGVER-r$KERNEL_PKGREL"' scripts/mkrootfs.sh \
+	|| fail "rootfs does not install the exact generated linux-headers version"
 
 # abuild's automatic repository-index update verifies the newly signed APKs.
 # Exercise the same key derivation and trust installation used by kernel-pkg.sh.

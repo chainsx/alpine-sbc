@@ -9,8 +9,9 @@ usage() {
 	cat <<'EOF'
 Usage: scripts/libs/kernel-pkg.sh --board NAME
 
-Create signed Alpine linux-<flavor>, linux-<flavor>-dev, and
-linux-<flavor>-doc packages plus a signed local APK repository.
+Create signed Alpine linux-<flavor>, linux-<flavor>-dev,
+linux-<flavor>-doc, and linux-headers packages plus a signed local APK
+repository.
 EOF
 }
 
@@ -59,7 +60,7 @@ source "$metadata_file"
 [[ "$KERNEL_BOARD" == "$board" ]] || die "Staged kernel belongs to '$KERNEL_BOARD', not '$board'."
 [[ "$KERNEL_FLAVOR" == "$kernel_flavor" ]] || die "Kernel flavor metadata does not match the board configuration."
 [[ "$KERNEL_APK_ARCH" == aarch64 ]] || die "Only aarch64 APK output is supported."
-for directory in kernel-bin kernel-dev-bin kernel-doc-bin; do
+for directory in kernel-bin kernel-dev-bin kernel-doc-bin kernel-headers-bin; do
 	[[ -d "$package_root/$directory" ]] || die "Missing package staging directory: $package_root/$directory"
 done
 [[ -f "$template" ]] || die "APKBUILD template not found: $template"
@@ -86,10 +87,13 @@ sed \
 	"$template" > "$package_root/APKBUILD"
 
 rm -f "$repository_dir"/linux-"$KERNEL_FLAVOR"-*.apk \
+	"$repository_dir"/linux-headers-*.apk \
 	"$repository_dir"/APKINDEX.tar.gz
 mkdir -p "$repository_root/abuild-output"
 find "$repository_root/abuild-output" -type f \
 	-name "linux-$KERNEL_FLAVOR-*.apk" -delete
+find "$repository_root/abuild-output" -type f \
+	-name 'linux-headers-*.apk' -delete
 
 log_info "Building signed Alpine kernel packages"
 (
@@ -101,10 +105,11 @@ log_info "Building signed Alpine kernel packages"
 
 mapfile -d '' built_packages < <(
 	find "$repository_root/abuild-output" -type f \
-		-name "linux-$KERNEL_FLAVOR-*.apk" -print0
+		\( -name "linux-$KERNEL_FLAVOR-*.apk" \
+		-o -name "linux-headers-$KERNEL_PKGVER-r$KERNEL_PKGREL.apk" \) -print0
 )
-((${#built_packages[@]} == 3)) \
-	|| die "Expected exactly three current kernel APKs; found ${#built_packages[@]}."
+((${#built_packages[@]} == 4)) \
+	|| die "Expected exactly four current kernel APKs; found ${#built_packages[@]}."
 cp -f "${built_packages[@]}" "$repository_dir/"
 
 log_info "Creating signed local APK repository index"
@@ -117,13 +122,15 @@ log_info "Creating signed local APK repository index"
 main_apk="$repository_dir/linux-$KERNEL_FLAVOR-$KERNEL_PKGVER-r$KERNEL_PKGREL.apk"
 dev_apk="$repository_dir/linux-$KERNEL_FLAVOR-dev-$KERNEL_PKGVER-r$KERNEL_PKGREL.apk"
 doc_apk="$repository_dir/linux-$KERNEL_FLAVOR-doc-$KERNEL_PKGVER-r$KERNEL_PKGREL.apk"
-[[ -f "$main_apk" && -f "$dev_apk" && -f "$doc_apk" ]] \
+headers_apk="$repository_dir/linux-headers-$KERNEL_PKGVER-r$KERNEL_PKGREL.apk"
+[[ -f "$main_apk" && -f "$dev_apk" && -f "$doc_apk" && -f "$headers_apk" ]] \
 	|| die "One or more expected kernel packages are missing from $repository_dir."
 
 cat > "$repository_root/kernel-packages.env" <<EOF
 KERNEL_PACKAGE='linux-$KERNEL_FLAVOR'
 KERNEL_DEV_PACKAGE='linux-$KERNEL_FLAVOR-dev'
 KERNEL_DOC_PACKAGE='linux-$KERNEL_FLAVOR-doc'
+KERNEL_HEADERS_PACKAGE='linux-headers'
 KERNEL_FLAVOR='$KERNEL_FLAVOR'
 KERNEL_PKGVER='$KERNEL_PKGVER'
 KERNEL_PKGREL='$KERNEL_PKGREL'

@@ -29,6 +29,7 @@ keep_rootfs=0
 kernel_flavor=""
 KERNEL_FLAVOR=""
 KERNEL_PACKAGE=""
+KERNEL_HEADERS_PACKAGE=""
 KERNEL_PKGVER=""
 KERNEL_PKGREL=""
 KERNEL_ABI_RELEASE=""
@@ -178,12 +179,17 @@ install_packages() {
 	# shellcheck disable=SC2086
 	chroot "$rootfs" apk add --no-cache $kernel_firmware_packages
 
-	log_info "Installing signed custom kernel package: $KERNEL_PACKAGE"
+	log_info "Installing signed custom kernel packages: $KERNEL_PACKAGE, $KERNEL_HEADERS_PACKAGE"
 	chroot "$rootfs" apk add --no-cache \
-		--repository "$rootfs_kernel_repository" "$KERNEL_PACKAGE"
+		--repository "$rootfs_kernel_repository" \
+		"$KERNEL_PACKAGE=$KERNEL_PKGVER-r$KERNEL_PKGREL" \
+		"$KERNEL_HEADERS_PACKAGE=$KERNEL_PKGVER-r$KERNEL_PKGREL"
 
 	chroot "$rootfs" apk info --exists "$KERNEL_PACKAGE=$KERNEL_PKGVER-r$KERNEL_PKGREL" \
 		|| die "The requested kernel package version was not installed."
+	chroot "$rootfs" apk info --exists \
+		"$KERNEL_HEADERS_PACKAGE=$KERNEL_PKGVER-r$KERNEL_PKGREL" \
+		|| die "The matching generated linux-headers package was not installed."
 
 	# Installation already invokes Alpine's mkinitfs trigger.  Generate once more
 	# explicitly so trigger failures and stale images from --keep-rootfs are visible.

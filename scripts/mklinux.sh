@@ -11,7 +11,8 @@ Usage: scripts/mklinux.sh --board NAME [options]
 
 Fetch, patch, configure, and compile a board kernel.  The output is staged in
 the same layout used by Alpine's linux-* APKBUILD, including the external
-module development tree used by linux-<flavor>-dev.
+module development tree used by linux-<flavor>-dev and the sanitized UAPI
+headers used by linux-headers.
 
 Options:
   --board NAME          Board configuration name
@@ -86,6 +87,7 @@ kernel_build="$WORK_DIR/linux-build/$kernel_flavor"
 package_stage="$WORK_DIR/kernel-pkg/kernel-bin"
 dev_stage="$WORK_DIR/kernel-pkg/kernel-dev-bin"
 doc_stage="$WORK_DIR/kernel-pkg/kernel-doc-bin"
+headers_stage="$WORK_DIR/kernel-pkg/kernel-headers-bin"
 config_path="$PROJECT_ROOT/configs/kernel/$kernel_config"
 source_state="$kernel_src/.alpine-sbc-source"
 
@@ -303,6 +305,55 @@ stage_kernel_dev_package() {
 	ln -s "/usr/src/linux-headers-$abi_release" "$dev_stage/lib/modules/$abi_release/build"
 }
 
+stage_linux_headers_package() {
+	local abi_release="$1"
+	local include_dir="$headers_stage/usr/include"
+	local header_count
+
+	safe_remove_tree "$headers_stage"
+	mkdir -p "$headers_stage/usr"
+
+	# Match Alpine's main/linux-headers build: export the sanitized userspace
+	# UAPI from this exact kernel source instead of packaging the source tree or
+	# reusing headers from an unrelated repository kernel.
+	log_info "Exporting sanitized userspace UAPI headers (linux-headers)"
+	make -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" \
+		AWK="${AWK:-mawk}" headers
+	[[ -d "$kernel_build/usr/include/linux" ]] \
+		|| die "The kernel headers target did not generate usr/include/linux."
+	cp -a "$kernel_build/usr/include" "$headers_stage/usr/"
+	find "$include_dir" ! -iname '*.h' -type f -delete
+
+	# Alpine carries these two UAPI compatibility changes in main/linux-headers.
+	# Apply the equivalent changes to the exported copy so the compiled kernel
+	# source and external-module development tree remain untouched.
+	if [[ -f "$include_dir/linux/if_tunnel.h" ]]; then
+		sed -i \
+			-e '/^#include <linux\/if\.h>$/d' \
+			-e '/^#include <linux\/ip\.h>$/d' \
+			-e '/^#include <linux\/in6\.h>$/d' \
+			"$include_dir/linux/if_tunnel.h"
+	fi
+	if [[ -f "$include_dir/linux/kernel.h" ]] \
+		&& grep -Fxq '#include <linux/sysinfo.h>' "$include_dir/linux/kernel.h" \
+		&& ! grep -Fxq '#ifdef __GLIBC__' "$include_dir/linux/kernel.h"; then
+		sed -i \
+			'/^#include <linux\/sysinfo\.h>$/i #ifdef __GLIBC__' \
+			"$include_dir/linux/kernel.h"
+		sed -i \
+			'/^#include <linux\/sysinfo\.h>$/a #endif' \
+			"$include_dir/linux/kernel.h"
+	fi
+
+	[[ -s "$include_dir/linux/version.h" ]] \
+		|| die "Generated linux-headers is missing linux/version.h."
+	[[ -s "$include_dir/asm/unistd.h" ]] \
+		|| die "Generated linux-headers is missing architecture UAPI headers."
+	header_count="$(find "$include_dir" -type f -name '*.h' -print | wc -l)"
+	((header_count > 0)) || die "Generated linux-headers package contains no headers."
+	log_info "Staged $header_count sanitized UAPI headers from $abi_release"
+}
+
 stage_kernel_doc_package() {
 	safe_remove_tree "$doc_stage"
 	local destination="$doc_stage/usr/share/doc/linux-doc-$kernel_pkgver"
@@ -340,6 +391,7 @@ abi_release="$(make -s -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" ke
 log_info "Kernel package version: $kernel_pkgver-r$kernel_pkgrel; ABI: $abi_release"
 stage_kernel_package "$abi_release"
 stage_kernel_dev_package "$abi_release"
+stage_linux_headers_package "$abi_release"
 stage_kernel_doc_package
 write_metadata "$abi_release"
 log_info "Kernel staging complete: $WORK_DIR/kernel-pkg"

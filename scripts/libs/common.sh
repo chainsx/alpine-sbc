@@ -266,6 +266,7 @@ load_kernel_package_manifest() {
 	KERNEL_PACKAGE=""
 	KERNEL_DEV_PACKAGE=""
 	KERNEL_DOC_PACKAGE=""
+	KERNEL_HEADERS_PACKAGE=""
 	KERNEL_FLAVOR=""
 	KERNEL_PKGVER=""
 	KERNEL_PKGREL=""
@@ -280,6 +281,7 @@ load_kernel_package_manifest() {
 	source "$manifest"
 
 	for variable in KERNEL_PACKAGE KERNEL_DEV_PACKAGE KERNEL_DOC_PACKAGE \
+		KERNEL_HEADERS_PACKAGE \
 		KERNEL_FLAVOR KERNEL_PKGVER KERNEL_PKGREL KERNEL_ABI_RELEASE \
 		KERNEL_REPOSITORY KERNEL_PUBLIC_KEY; do
 		[[ -n "${!variable:-}" ]] \
@@ -289,7 +291,8 @@ load_kernel_package_manifest() {
 		|| die "Kernel packages for '$KERNEL_FLAVOR' do not match '$expected_flavor'."
 	[[ "$KERNEL_PACKAGE" == "linux-$KERNEL_FLAVOR" \
 		&& "$KERNEL_DEV_PACKAGE" == "linux-$KERNEL_FLAVOR-dev" \
-		&& "$KERNEL_DOC_PACKAGE" == "linux-$KERNEL_FLAVOR-doc" ]] \
+		&& "$KERNEL_DOC_PACKAGE" == "linux-$KERNEL_FLAVOR-doc" \
+		&& "$KERNEL_HEADERS_PACKAGE" == linux-headers ]] \
 		|| die "Kernel package names are inconsistent in $manifest"
 	[[ "$KERNEL_PKGREL" =~ ^[0-9]+$ ]] \
 		|| die "Kernel package manifest has invalid KERNEL_PKGREL='$KERNEL_PKGREL'."
@@ -298,7 +301,8 @@ load_kernel_package_manifest() {
 	[[ -s "$KERNEL_PUBLIC_KEY" ]] \
 		|| die "Kernel repository public key is missing: $KERNEL_PUBLIC_KEY"
 
-	for package_name in "$KERNEL_PACKAGE" "$KERNEL_DEV_PACKAGE" "$KERNEL_DOC_PACKAGE"; do
+	for package_name in "$KERNEL_PACKAGE" "$KERNEL_DEV_PACKAGE" \
+		"$KERNEL_DOC_PACKAGE" "$KERNEL_HEADERS_PACKAGE"; do
 		package_path="$KERNEL_REPOSITORY/$package_name-$KERNEL_PKGVER-r$KERNEL_PKGREL.apk"
 		[[ -s "$package_path" ]] || die "Kernel package is missing or empty: $package_path"
 	done

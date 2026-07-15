@@ -10,9 +10,9 @@ url="@KERNEL_URL@"
 arch="@APK_ARCH@"
 license="GPL-2.0-only"
 depends="initramfs-generator"
-_depends_dev="linux-headers perl gmp-dev mpc1-dev mpfr-dev elfutils-dev bash flex bison zstd"
+_depends_dev="linux-headers=$pkgver-r$pkgrel perl gmp-dev mpc1-dev mpfr-dev elfutils-dev bash flex bison zstd"
 options="!check !strip !tracedeps !archcheck"
-subpackages="$pkgname-dev:_dev $pkgname-doc:_doc:noarch"
+subpackages="$pkgname-dev:_dev $pkgname-doc:_doc:noarch linux-headers:_headers"
 source=""
 
 package() {
@@ -39,6 +39,16 @@ _doc() {
 	depends=""
 	local external_src="$startdir/kernel-doc-bin"
 	[ -d "$external_src/usr/share/doc" ] || die "missing staged kernel documentation"
+	mkdir -p "$subpkgdir"
+	cp -a "$external_src"/. "$subpkgdir"/
+}
+
+_headers() {
+	pkgdesc="Linux system headers generated from the @BOARD@ kernel source"
+	depends=""
+	local external_src="$startdir/kernel-headers-bin"
+	[ -s "$external_src/usr/include/linux/version.h" ] \
+		|| die "missing staged Linux UAPI headers"
 	mkdir -p "$subpkgdir"
 	cp -a "$external_src"/. "$subpkgdir"/
 }
