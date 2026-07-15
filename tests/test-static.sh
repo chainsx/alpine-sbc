@@ -241,6 +241,15 @@ EOF
 load_kernel_package_manifest "$manifest_test_dir/kernel-packages.env" sbc-test-board
 [[ "$KERNEL_ABI_RELEASE" == 6.12.1-0-sbc-test-board ]] \
 	|| fail "kernel package manifest did not export the validated ABI release"
+mkdir -p "$manifest_test_dir/rootfs"
+stage_apk_repository "$manifest_test_dir/repository" "$manifest_test_dir/rootfs" \
+	/tmp/alpine-sbc-repository aarch64
+for repository_file in APKINDEX.tar.gz linux-sbc-test-board-6.12.1-r0.apk; do
+	[[ -s "$manifest_test_dir/rootfs/tmp/alpine-sbc-repository/aarch64/$repository_file" ]] \
+		|| fail "staged APK repository is missing aarch64/$repository_file"
+done
+rg -Fq -- '--repository "$rootfs_kernel_repository"' scripts/mkrootfs.sh \
+	|| fail "rootfs package installation does not use the staged repository root"
 
 # abuild's automatic repository-index update verifies the newly signed APKs.
 # Exercise the same key derivation and trust installation used by kernel-pkg.sh.

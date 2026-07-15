@@ -305,6 +305,21 @@ load_kernel_package_manifest() {
 	log_info "Validated kernel package repository for $KERNEL_FLAVOR"
 }
 
+stage_apk_repository() {
+	local source_repository="$1" rootfs="$2" repository_root="$3" repository_arch="$4"
+	local destination packages=("$source_repository"/*.apk)
+	[[ "$repository_root" == /* && "$repository_root" != / ]] \
+		|| die "APK repository root must be an absolute path below /: $repository_root"
+	[[ "$repository_arch" =~ ^[A-Za-z0-9._-]+$ ]] \
+		|| die "Invalid APK repository architecture: $repository_arch"
+	[[ -s "$source_repository/APKINDEX.tar.gz" && -e "${packages[0]}" ]] \
+		|| die "Source APK repository is incomplete: $source_repository"
+	destination="$rootfs${repository_root%/}/$repository_arch"
+	mkdir -p "$destination"
+	cp "$source_repository/APKINDEX.tar.gz" "${packages[@]}" "$destination/"
+	log_info "Staged APK repository: ${repository_root%/}/$repository_arch"
+}
+
 prepare_apk_signing_key() {
 	local private_key="$1" public_key="$2" trusted_keys_dir="$3"
 	local temporary_public_key="${public_key}.tmp.$$"

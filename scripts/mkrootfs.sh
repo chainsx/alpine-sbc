@@ -36,6 +36,7 @@ KERNEL_REPOSITORY=""
 KERNEL_PUBLIC_KEY=""
 platform=""
 rootfs_arch=""
+rootfs_kernel_repository="/tmp/alpine-sbc-repository"
 
 while (($#)); do
 	case "$1" in
@@ -146,10 +147,9 @@ $mirror/alpine/$release_branch/community
 EOF
 	cp "$KERNEL_PUBLIC_KEY" "$rootfs/etc/apk/keys/"
 
-	rm -rf "$rootfs/tmp/alpine-sbc-repository"
-	mkdir -p "$rootfs/tmp/alpine-sbc-repository"
-	cp "$KERNEL_REPOSITORY"/*.apk "$KERNEL_REPOSITORY/APKINDEX.tar.gz" \
-		"$rootfs/tmp/alpine-sbc-repository/"
+	rm -rf "$rootfs$rootfs_kernel_repository"
+	stage_apk_repository "$KERNEL_REPOSITORY" "$rootfs" \
+		"$rootfs_kernel_repository" "$apk_arch"
 }
 
 kernel_firmware_packages="${kernel_firmware_packages:-}"
@@ -180,7 +180,7 @@ install_packages() {
 
 	log_info "Installing signed custom kernel package: $KERNEL_PACKAGE"
 	chroot "$rootfs" apk add --no-cache \
-		--repository /tmp/alpine-sbc-repository "$KERNEL_PACKAGE"
+		--repository "$rootfs_kernel_repository" "$KERNEL_PACKAGE"
 
 	chroot "$rootfs" apk info --exists "$KERNEL_PACKAGE=$KERNEL_PKGVER-r$KERNEL_PKGREL" \
 		|| die "The requested kernel package version was not installed."
@@ -269,7 +269,7 @@ SERIAL_CONSOLE=$serial_console
 SERIAL_BAUD=$serial_baud
 EOF
 
-	rm -rf "$rootfs/tmp/alpine-sbc-repository" "$rootfs/var/cache/apk"/*
+	rm -rf "$rootfs$rootfs_kernel_repository" "$rootfs/var/cache/apk"/*
 }
 
 download_rootfs

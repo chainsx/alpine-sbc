@@ -23,6 +23,8 @@ board against one explicit configuration contract.
   cannot silently republish an older kernel package.
 - Derived the repository public key from the active private key and installed it
   into the host APK trust store before abuild performs its automatic index update.
+- Staged the local kernel repository below its required `aarch64/` directory so
+  apk's repository-root resolution finds both `APKINDEX.tar.gz` and the APKs.
 - Added generated extlinux/GRUB configuration checks and U-Boot capability and
   output-manifest validation.
 - Corrected DshanPi A1 to the RK3576 DTB and pinned its DDR TPL to the known-good
