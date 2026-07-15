@@ -20,6 +20,7 @@ package() {
 	local external_src="$startdir/kernel-bin"
 	[ -d "$external_src/lib/modules/$_abi_release" ] \
 		|| die "missing staged modules for $_abi_release"
+	mkdir -p "$pkgdir"
 	cp -a "$external_src"/. "$pkgdir"/
 }
 
@@ -29,6 +30,7 @@ _dev() {
 	local external_src="$startdir/kernel-dev-bin"
 	[ -d "$external_src/usr/src/linux-headers-$_abi_release" ] \
 		|| die "missing staged development headers for $_abi_release"
+	mkdir -p "$subpkgdir"
 	cp -a "$external_src"/. "$subpkgdir"/
 }
 
@@ -37,5 +39,6 @@ _doc() {
 	depends=""
 	local external_src="$startdir/kernel-doc-bin"
 	[ -d "$external_src/usr/share/doc" ] || die "missing staged kernel documentation"
+	mkdir -p "$subpkgdir"
 	cp -a "$external_src"/. "$subpkgdir"/
 }

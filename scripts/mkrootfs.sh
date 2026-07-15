@@ -71,13 +71,7 @@ require_board_variables platform rootfs_arch
 	|| die "Board rootfs_arch '$rootfs_arch' does not match requested '$apk_arch'."
 
 package_manifest="$WORK_DIR/packages/kernel-packages.env"
-[[ -f "$package_manifest" ]] || die "Kernel package manifest is missing; build the kernel packages first."
-# shellcheck disable=SC1090
-source "$package_manifest"
-[[ "$KERNEL_FLAVOR" == "$kernel_flavor" ]] || die "Kernel packages do not match board '$board'."
-[[ -d "$KERNEL_REPOSITORY" && -f "$KERNEL_REPOSITORY/APKINDEX.tar.gz" ]] \
-	|| die "Signed kernel repository is incomplete: $KERNEL_REPOSITORY"
-[[ -f "$KERNEL_PUBLIC_KEY" ]] || die "Kernel repository public key is missing: $KERNEL_PUBLIC_KEY"
+load_kernel_package_manifest "$package_manifest" "$kernel_flavor"
 
 release_branch="v${version%.*}"
 archive="alpine-minirootfs-$version-$apk_arch.tar.gz"
@@ -236,26 +230,19 @@ EOF
 	ln -sfn /usr/share/zoneinfo/Asia/Singapore "$rootfs/etc/localtime"
 	printf '%s\n' Asia/Singapore > "$rootfs/etc/timezone"
 
-	if [[ -n "${serial_console:-}" ]]; then
-		[[ "$serial_console" =~ ^[A-Za-z0-9._-]+$ ]] \
-			|| die "Invalid serial_console value: $serial_console"
-		serial_baud="${serial_baud:-115200}"
-		[[ "$serial_baud" =~ ^[1-9][0-9]*$ ]] \
-			|| die "Invalid serial_baud value: $serial_baud"
-		# Remove serial getty entries created by older alpine-sbc builds so
-		# --keep-rootfs can safely switch boards or corrected console names.
-		sed -i -E \
-			'/^(ttyAMA[0-9]+|ttyFIQ[0-9]+|ttyAML[0-9]+|ttySTM[0-9]+|ttyS[0-9]+)::respawn:\/sbin\/getty -L [0-9]+ [A-Za-z0-9._-]+ vt100( # alpine-sbc)?$/d' \
-			"$rootfs/etc/inittab"
-		printf '%s::respawn:/sbin/getty -L %s %s vt100 # alpine-sbc\n' \
-			"$serial_console" "$serial_baud" "$serial_console" \
-			>> "$rootfs/etc/inittab"
-		if [[ -f "$rootfs/etc/securetty" ]] \
-			&& ! grep -Fxq "$serial_console" "$rootfs/etc/securetty"; then
-			printf '%s\n' "$serial_console" >> "$rootfs/etc/securetty"
-		fi
-		log_info "Enabled serial console getty on $serial_console at $serial_baud baud"
+	# Remove serial getty entries created by older alpine-sbc builds so
+	# --keep-rootfs can safely switch boards or corrected console names.
+	sed -i -E \
+		'/^(ttyAMA[0-9]+|ttyFIQ[0-9]+|ttyAML[0-9]+|ttySTM[0-9]+|ttyS[0-9]+)::respawn:\/sbin\/getty -L [0-9]+ [A-Za-z0-9._-]+ vt100( # alpine-sbc)?$/d' \
+		"$rootfs/etc/inittab"
+	printf '%s::respawn:/sbin/getty -L %s %s vt100 # alpine-sbc\n' \
+		"$serial_console" "$serial_baud" "$serial_console" \
+		>> "$rootfs/etc/inittab"
+	if [[ -f "$rootfs/etc/securetty" ]] \
+		&& ! grep -Fxq "$serial_console" "$rootfs/etc/securetty"; then
+		printf '%s\n' "$serial_console" >> "$rootfs/etc/securetty"
 	fi
+	log_info "Enabled serial console getty on $serial_console at $serial_baud baud"
 
 	sed -i -E \
 		-e 's/^[#[:space:]]*PermitRootLogin.*/PermitRootLogin prohibit-password/' \
@@ -278,8 +265,8 @@ EOF
 BOARD=$board
 KERNEL_FLAVOR=$KERNEL_FLAVOR
 KERNEL_RELEASE=$KERNEL_ABI_RELEASE
-SERIAL_CONSOLE=${serial_console:-none}
-SERIAL_BAUD=${serial_baud:-none}
+SERIAL_CONSOLE=$serial_console
+SERIAL_BAUD=$serial_baud
 EOF
 
 	rm -rf "$rootfs/tmp/alpine-sbc-repository" "$rootfs/var/cache/apk"/*

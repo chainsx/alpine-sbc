@@ -90,11 +90,11 @@ if (( install_deps )); then
 	host_dependencies=(
 		alpine-sdk abuild bash bc binutils bison bpftool build-base ca-certificates cmake cpio \
 		coreutils curl diffutils dosfstools dtc e2fsprogs e2fsprogs-extra \
-		elfutils-dev findutils flex git gmp-dev grep libarchive-tools linux-headers \
+		elfutils-dev findutils flex gawk git gmp-dev gnutls-dev grep libarchive-tools linux-headers \
 		mawk mpc1-dev mpfr-dev ncurses-dev openssl openssl-dev pahole parted \
 		gptfdisk perl py3-cryptography py3-elftools py3-pillow py3-setuptools \
 		python3 python3-dev rsync sed shadow \
-		swig tar util-linux wget xz zstd
+		swig tar util-linux util-linux-dev wget xz zstd
 	)
 	if [[ "$boot_mode" == grub ]]; then
 		host_dependencies+=(grub grub-efi aavmf qemu-system-aarch64)
@@ -112,6 +112,7 @@ if (( build_bootloader )); then
 	"$PROJECT_ROOT/scripts/mkbootloader.sh" --board "$board" --jobs "$jobs"
 else
 	log_warn "Stage 1/4 skipped: bootloader"
+	validate_bootloader_manifest "$WORK_DIR/bootloader-artifacts.sha256"
 fi
 
 if (( build_kernel )); then
@@ -120,8 +121,7 @@ if (( build_kernel )); then
 	"$PROJECT_ROOT/scripts/libs/kernel-pkg.sh" --board "$board"
 else
 	log_warn "Stage 2/4 skipped: kernel"
-	[[ -f "$WORK_DIR/packages/kernel-packages.env" ]] \
-		|| die "Kernel package manifest is missing; rebuild without --skip-kernel."
+	load_kernel_package_manifest "$WORK_DIR/packages/kernel-packages.env" "$kernel_flavor"
 fi
 
 if (( build_rootfs )); then
@@ -134,8 +134,26 @@ if (( build_rootfs )); then
 		--board "$board"
 else
 	log_warn "Stage 3/4 skipped: root filesystem"
-	[[ -f "$WORK_DIR/rootfs/etc/alpine-release" ]] \
-		|| die "Root filesystem is missing; rebuild without --skip-rootfs."
+	load_kernel_package_manifest "$WORK_DIR/packages/kernel-packages.env" "$kernel_flavor"
+	rootfs_release="$WORK_DIR/rootfs/etc/alpine-release"
+	rootfs_metadata="$WORK_DIR/rootfs/etc/alpine-sbc-release"
+	[[ -s "$rootfs_release" && "$(cat "$rootfs_release")" == "$version" ]] \
+		|| die "Root filesystem is missing or is not Alpine $version; rebuild without --skip-rootfs."
+	[[ -s "$rootfs_metadata" ]] \
+		|| die "Root filesystem board metadata is missing; rebuild without --skip-rootfs."
+	grep -Fxq "BOARD=$board" "$rootfs_metadata" \
+		|| die "Cached root filesystem was built for a different board."
+	grep -Fxq "KERNEL_FLAVOR=$kernel_flavor" "$rootfs_metadata" \
+		|| die "Cached root filesystem contains a different kernel flavor."
+	[[ -s "$WORK_DIR/rootfs/boot/vmlinuz-$kernel_flavor" ]] \
+		|| die "Cached root filesystem is missing its kernel image."
+	[[ -s "$WORK_DIR/rootfs/boot/initramfs-$kernel_flavor" ]] \
+		|| die "Cached root filesystem is missing its initramfs."
+	if [[ "$dtb_name" != none ]]; then
+		[[ -s "$WORK_DIR/rootfs/boot/dtbs-$kernel_flavor/$dtb_name.dtb" ]] \
+			|| die "Cached root filesystem is missing the board DTB."
+	fi
+	log_info "Validated cached root filesystem for $board"
 fi
 
 if (( build_image )); then

@@ -12,7 +12,7 @@ generate_extlinux_config() {
 		printf 'timeout 30\n\n'
 		printf 'label Alpine\n'
 		printf '  kernel /vmlinuz-%s\n' "$KERNEL_FLAVOR"
-		if [[ "${initrd:-yes}" == yes ]]; then
+		if [[ "$initrd" == yes ]]; then
 			printf '  initrd /initramfs-%s\n' "$KERNEL_FLAVOR"
 		fi
 		if [[ "$dtb_name" != none ]]; then
@@ -31,7 +31,7 @@ generate_grub_config() {
 		printf 'menuentry "Alpine Linux (%s)" {\n' "$KERNEL_FLAVOR"
 		printf '    search --no-floppy --set=root --label bootfs\n'
 		printf '    linux /vmlinuz-%s %s\n' "$KERNEL_FLAVOR" "$bootargs"
-		if [[ "${initrd:-yes}" == yes ]]; then
+		if [[ "$initrd" == yes ]]; then
 			printf '    initrd /initramfs-%s\n' "$KERNEL_FLAVOR"
 		fi
 		printf '}\n'

@@ -106,17 +106,24 @@ Create `boards/<name>.config` with at least:
 arch="arm64"
 rootfs_arch="aarch64"
 platform="rockchip64"
+soc="rk35xx"
+
+bootloader="u-boot"
 boot_mode="extlinux"
 bootargs="console=ttyS2,1500000 root=LABEL=rootfs rootwait rw"
-
 bootloader_url="..."
 bootloader_branch="..."
 bootloader_config="..._defconfig"
+atf_compile="no"
+rkbin="yes"
 
 kernel_url="..."
 kernel_branch="..."
 kernel_config="linux-....config"
+kernel_flavor="sbc-<name>"
+kernel_pkgrel="0"
 dtb_name="vendor/board"
+initrd="yes"
 
 serial_console="ttyS2"
 serial_baud="1500000"

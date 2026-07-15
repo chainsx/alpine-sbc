@@ -191,7 +191,7 @@ configure_kernel() {
 			|| die "$serial_console requires ${option}=y."
 	fi
 
-	if [[ "${boot_mode:-}" == grub ]]; then
+	if [[ "$boot_mode" == grub ]]; then
 		local required_efi_options=(
 			CONFIG_EFI CONFIG_EFI_STUB CONFIG_EFI_PARTITION CONFIG_ACPI CONFIG_PCI
 			CONFIG_PCI_HOST_GENERIC

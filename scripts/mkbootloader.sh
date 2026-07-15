@@ -156,7 +156,7 @@ fi
 
 log_info "Configuring U-Boot with $bootloader_config"
 make -C "$uboot_dir" "$bootloader_config"
-if [[ "${boot_mode:-}" == extlinux ]]; then
+if [[ "$boot_mode" == extlinux ]]; then
 	if ! grep -q '^CONFIG_DISTRO_DEFAULTS=y' "$uboot_dir/.config"; then
 		grep -q '^CONFIG_BOOTSTD=y' "$uboot_dir/.config" \
 			|| die "U-Boot configuration cannot scan an extlinux boot filesystem."

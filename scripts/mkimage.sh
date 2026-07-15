@@ -25,6 +25,7 @@ part_table=""
 bootargs=""
 boot_mode=""
 platform=""
+initrd=""
 KERNEL_FLAVOR=""
 while (($#)); do
 	case "$1" in
@@ -50,7 +51,7 @@ require_root
 require_commands awk dd du mount mountpoint umount parted losetup mkfs.vfat mkfs.ext4 \
 	rsync sha256sum stat sync truncate xz
 load_board_config "$board"
-require_board_variables platform boot_mode bootargs part_table boot_size dtb_name
+require_board_variables platform boot_mode bootargs part_table boot_size dtb_name initrd
 
 if [[ "$part_table" == gpt ]]; then
 	require_commands sgdisk
@@ -70,10 +71,7 @@ case "$boot_mode" in
 esac
 
 package_manifest="$WORK_DIR/packages/kernel-packages.env"
-[[ -f "$package_manifest" ]] || die "Kernel package manifest is missing."
-# shellcheck disable=SC1090
-source "$package_manifest"
-[[ "$KERNEL_FLAVOR" == "$kernel_flavor" ]] || die "Kernel package flavor does not match board '$board'."
+load_kernel_package_manifest "$package_manifest" "$kernel_flavor"
 
 rootfs_dir="$WORK_DIR/rootfs"
 # Used by the sourced bootloader installation function.
@@ -89,7 +87,7 @@ device=""
 [[ -f "$rootfs_dir/etc/alpine-release" ]] || die "Root filesystem is missing or incomplete: $rootfs_dir"
 [[ -f "$rootfs_dir/boot/vmlinuz-$KERNEL_FLAVOR" ]] \
 	|| die "Kernel image is missing from rootfs."
-if [[ "${initrd:-yes}" == yes ]]; then
+if [[ "$initrd" == yes ]]; then
 	[[ -s "$rootfs_dir/boot/initramfs-$KERNEL_FLAVOR" ]] || die "Initramfs is missing from rootfs."
 fi
 if [[ "$dtb_name" != none ]]; then

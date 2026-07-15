@@ -22,18 +22,29 @@ source "$project_root/scripts/libs/common.sh"
 [[ "$(derive_kernel_flavor 'Firefly_RK3568.ROC-PC')" == sbc-firefly-rk3568-roc-pc ]] \
 	|| fail "kernel flavor normalization"
 
+rg -q '(^|[[:space:]])gnutls-dev([[:space:]\\]|$)' build.sh \
+	|| fail "host dependencies are missing gnutls-dev for U-Boot mkeficapsule"
+rg -q '(^|[[:space:]])gawk([[:space:]\\]|$)' build.sh \
+	|| fail "host dependencies are missing Alpine's U-Boot gawk dependency"
+rg -q '(^|[[:space:]])util-linux-dev([[:space:]\\]|$)' build.sh \
+	|| fail "host dependencies are missing Alpine's U-Boot util-linux-dev dependency"
+
 for config in boards/*.config; do
 	board="${config##*/}"
 	board="${board%.config}"
 	unset arch platform boot_mode bootargs bootloader_url bootloader_branch \
-		bootloader_config kernel_url kernel_branch kernel_config dtb_name \
+		bootloader bootloader_config atf_compile atf_url atf_branch atf_plat \
+		atf_extra_config rkbin rkbin_tpl_bin rkbin_tpl_revision \
+		amlogic_boot_fip stm32mp2_boot_fip optee_compile optee_url optee_branch \
+		optee_extra_config soc kernel_url kernel_branch kernel_config dtb_name \
 		rootfs_arch part_table boot_size kernel_flavor kernel_pkgrel initrd \
 		kernel_firmware_packages serial_console serial_baud
 	load_board_config "$board" >/dev/null
 	# shellcheck disable=SC2154
-	for required in arch platform boot_mode bootargs bootloader_url bootloader_branch \
-		bootloader_config kernel_url kernel_branch kernel_config dtb_name rootfs_arch \
-		part_table boot_size serial_console serial_baud; do
+	for required in arch platform bootloader boot_mode bootargs bootloader_url bootloader_branch \
+		bootloader_config kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel \
+		dtb_name rootfs_arch \
+		part_table boot_size initrd serial_console serial_baud; do
 		[[ -n "${!required:-}" ]] || fail "$config does not define $required"
 	done
 	# shellcheck disable=SC2154
@@ -47,7 +58,8 @@ for config in boards/*.config; do
 	# shellcheck disable=SC2154
 	[[ "$bootargs" == *"console=$serial_console,"* ]] \
 		|| fail "$config bootargs does not select $serial_console"
-	for option in DEVTMPFS DEVTMPFS_MOUNT EXT4_FS; do
+	[[ "$initrd" == yes ]] || fail "$config does not explicitly enable initrd"
+	for option in BLK_DEV_INITRD MODULES DEVTMPFS DEVTMPFS_MOUNT EXT4_FS; do
 		rg -q "^CONFIG_${option}=y$" "configs/kernel/$kernel_config" \
 			|| fail "$config kernel config is missing built-in CONFIG_${option}"
 	done
@@ -69,7 +81,7 @@ for config in boards/*.config; do
 	if [[ "$boot_mode" == grub ]]; then
 		[[ "$platform" == efi-arm64 ]] || fail "$config does not use the EFI platform"
 		[[ "$part_table" == gpt ]] || fail "$config does not use GPT for EFI"
-		[[ "${initrd:-}" == yes ]] || fail "$config does not enable an initramfs"
+		[[ "$initrd" == yes ]] || fail "$config does not enable an initramfs"
 	fi
 done
 
@@ -106,7 +118,10 @@ done
 source "$project_root/scripts/libs/boot-config.sh"
 boot_config_dir="$(mktemp -d)"
 rendered_apkbuild=""
-trap 'rm -f "${rendered_apkbuild:-}"; rm -rf "$boot_config_dir"' EXIT
+package_test_dir=""
+manifest_test_dir=""
+trap 'rm -f "${rendered_apkbuild:-}"; rm -rf "$boot_config_dir" \
+	"${package_test_dir:-}" "${manifest_test_dir:-}"' EXIT
 KERNEL_FLAVOR="sbc-test-board"
 bootargs="console=ttyS2,1500000 root=LABEL=rootfs rootwait rw"
 dtb_name="rockchip/test-board"
@@ -171,6 +186,60 @@ bash -n "$rendered_apkbuild"
 	[[ "$depends" == *initramfs-generator* ]] || fail "rendered initramfs dependency"
 	[[ "$_depends_dev" == *linux-headers* ]] || fail "rendered linux-headers dependency"
 )
+
+# Exercise the generated package functions with the same initially absent
+# pkgdir/subpkgdir state provided by abuild.
+package_test_dir="$(mktemp -d)"
+mkdir -p \
+	"$package_test_dir/start/kernel-bin/lib/modules/6.12.1-0-sbc-test-board" \
+	"$package_test_dir/start/kernel-dev-bin/usr/src/linux-headers-6.12.1-0-sbc-test-board" \
+	"$package_test_dir/start/kernel-doc-bin/usr/share/doc/linux-test"
+touch \
+	"$package_test_dir/start/kernel-bin/kernel.marker" \
+	"$package_test_dir/start/kernel-dev-bin/dev.marker" \
+	"$package_test_dir/start/kernel-doc-bin/doc.marker"
+(
+	# shellcheck disable=SC1090
+	source "$rendered_apkbuild"
+	# Consumed by the package functions loaded from the generated APKBUILD.
+	# shellcheck disable=SC2034
+	startdir="$package_test_dir/start"
+	pkgdir="$package_test_dir/pkg/main"
+	package
+	[[ -f "$pkgdir/kernel.marker" ]] || fail "kernel package function did not populate pkgdir"
+	subpkgdir="$package_test_dir/pkg/dev"
+	_dev
+	[[ -f "$subpkgdir/dev.marker" ]] || fail "kernel dev function did not populate subpkgdir"
+	subpkgdir="$package_test_dir/pkg/doc"
+	_doc
+	[[ -f "$subpkgdir/doc.marker" ]] || fail "kernel doc function did not populate subpkgdir"
+)
+
+# Exercise the cache validators used by all --skip-* build paths.
+manifest_test_dir="$(mktemp -d)"
+printf 'bootloader\n' > "$manifest_test_dir/u-boot.bin"
+sha256sum "$manifest_test_dir/u-boot.bin" > "$manifest_test_dir/bootloader.sha256"
+validate_bootloader_manifest "$manifest_test_dir/bootloader.sha256"
+mkdir -p "$manifest_test_dir/repository"
+printf 'index\n' > "$manifest_test_dir/repository/APKINDEX.tar.gz"
+printf 'key\n' > "$manifest_test_dir/repository/alpine-sbc.rsa.pub"
+for package_name in linux-sbc-test-board linux-sbc-test-board-dev linux-sbc-test-board-doc; do
+	printf 'apk\n' > "$manifest_test_dir/repository/$package_name-6.12.1-r0.apk"
+done
+cat > "$manifest_test_dir/kernel-packages.env" <<EOF
+KERNEL_PACKAGE='linux-sbc-test-board'
+KERNEL_DEV_PACKAGE='linux-sbc-test-board-dev'
+KERNEL_DOC_PACKAGE='linux-sbc-test-board-doc'
+KERNEL_FLAVOR='sbc-test-board'
+KERNEL_PKGVER='6.12.1'
+KERNEL_PKGREL='0'
+KERNEL_ABI_RELEASE='6.12.1-0-sbc-test-board'
+KERNEL_REPOSITORY='$manifest_test_dir/repository'
+KERNEL_PUBLIC_KEY='$manifest_test_dir/repository/alpine-sbc.rsa.pub'
+EOF
+load_kernel_package_manifest "$manifest_test_dir/kernel-packages.env" sbc-test-board
+[[ "$KERNEL_ABI_RELEASE" == 6.12.1-0-sbc-test-board ]] \
+	|| fail "kernel package manifest did not export the validated ABI release"
 
 for pattern in \
 	'mkpart fsbla1 34s 545s' \

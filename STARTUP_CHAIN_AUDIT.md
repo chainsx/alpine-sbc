@@ -1,13 +1,26 @@
 # Startup-chain audit
 
-This changeset is based on upstream `main` commit
-`c5e003ad1f046ff8ae2d9ecef590d7d15034bc60` (2026-07-14). It is intentionally
-separate from the earlier archive based on the January revision.
+This revision is based on upstream `main` commit
+`675376b02a3aa7e38ba782d598f49aa879559652` (2026-07-15). That upstream commit
+already contains the startup-chain changes initially audited against `c5e003a`;
+this follow-up fixes the missing extlinux initramfs setting and audits every
+board against one explicit configuration contract.
 
 ## Applied fixes
 
 - Added `efi-arm64`: GPT/ESP, `BOOTAA64.EFI`, GRUB for ARM64, U-Boot EFI, EDK2
   (AAVMF), and a reproducible QEMU launcher.
+- Added Alpine's `gnutls-dev` host package required to compile U-Boot's
+  `mkeficapsule` tool when EFI/capsule support is enabled. Also added `gawk` and
+  `util-linux-dev` to match Alpine's current U-Boot build dependencies.
+- Made `initrd=yes`, kernel flavor/revision, serial settings, boot layout, and
+  all other boot-critical fields explicit and validated for every board.
+- Validated bootloader checksums, all three kernel APKs, the signed repository,
+  and rootfs board/kernel metadata whenever a build stage is reused.
+- Made every generated kernel APK package function create its abuild output
+  directory before copying the staged kernel, development, or documentation tree.
+- Removed stale APKs from abuild output before packaging, so a reused build tree
+  cannot silently republish an older kernel package.
 - Added generated extlinux/GRUB configuration checks and U-Boot capability and
   output-manifest validation.
 - Corrected DshanPi A1 to the RK3576 DTB and pinned its DDR TPL to the known-good

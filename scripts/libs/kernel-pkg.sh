@@ -87,6 +87,9 @@ sed \
 
 rm -f "$repository_dir"/linux-"$KERNEL_FLAVOR"-*.apk \
 	"$repository_dir"/APKINDEX.tar.gz
+mkdir -p "$repository_root/abuild-output"
+find "$repository_root/abuild-output" -type f \
+	-name "linux-$KERNEL_FLAVOR-*.apk" -delete
 
 log_info "Building signed Alpine kernel packages"
 (
@@ -100,8 +103,8 @@ mapfile -d '' built_packages < <(
 	find "$repository_root/abuild-output" -type f \
 		-name "linux-$KERNEL_FLAVOR-*.apk" -print0
 )
-((${#built_packages[@]} >= 3)) \
-	|| die "Expected kernel, development, and documentation APKs; found ${#built_packages[@]}."
+((${#built_packages[@]} == 3)) \
+	|| die "Expected exactly three current kernel APKs; found ${#built_packages[@]}."
 cp -f "${built_packages[@]}" "$repository_dir/"
 
 log_info "Creating signed local APK repository index"
