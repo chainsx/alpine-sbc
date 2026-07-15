@@ -34,6 +34,10 @@ override_branch=""
 override_config=""
 kernel_flavor=""
 kernel_pkgrel=""
+boot_mode=""
+initrd=""
+dtb_name=""
+serial_console=""
 
 while (($#)); do
 	case "$1" in
@@ -67,7 +71,8 @@ kernel_arch="${override_arch:-${arch:-}}"
 kernel_url="${override_url:-${kernel_url:-}}"
 kernel_branch="${override_branch:-${kernel_branch:-}}"
 kernel_config="${override_config:-${kernel_config:-}}"
-require_board_variables kernel_arch kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel
+require_board_variables kernel_arch kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel \
+	boot_mode initrd dtb_name serial_console serial_baud
 
 kernel_arch="$(normalize_arch "$kernel_arch")"
 [[ "$kernel_arch" == arm64 ]] || die "Only arm64 kernels are supported; requested '$kernel_arch'."
@@ -138,6 +143,7 @@ apply_kernel_changes() {
 }
 
 configure_kernel() {
+	local option
 	mkdir -p "$kernel_build"
 	printf -- '-%s-%s\n' "$kernel_pkgrel" "$kernel_flavor" > "$kernel_build/localversion-alpine"
 	cp "$config_path" "$kernel_build/.config"
@@ -157,6 +163,46 @@ configure_kernel() {
 	log_info "Configuring $kernel_flavor with $kernel_config"
 	make -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" \
 		AWK="${AWK:-mawk}" olddefconfig
+
+	for option in CONFIG_DEVTMPFS CONFIG_DEVTMPFS_MOUNT CONFIG_EXT4_FS; do
+		grep -q "^${option}=y" "$kernel_build/.config" \
+			|| die "Bootable rootfs requires ${option}=y."
+	done
+	if [[ "$initrd" == yes ]]; then
+		grep -q '^CONFIG_BLK_DEV_INITRD=y' "$kernel_build/.config" \
+			|| die "Board initramfs support requires CONFIG_BLK_DEV_INITRD=y."
+	fi
+
+	case "$serial_console" in
+		ttyFIQ*)
+			for option in CONFIG_FIQ_DEBUGGER_CONSOLE CONFIG_ROCKCHIP_FIQ_DEBUGGER; do
+				grep -q "^${option}=y" "$kernel_build/.config" \
+					|| die "$serial_console requires ${option}=y."
+			done
+			;;
+		ttyAML*) option=CONFIG_SERIAL_MESON_CONSOLE ;;
+		ttySTM*) option=CONFIG_SERIAL_STM32_CONSOLE ;;
+		ttyAMA*) option=CONFIG_SERIAL_AMBA_PL011_CONSOLE ;;
+		ttyS*) option=CONFIG_SERIAL_8250_CONSOLE ;;
+		*) die "Unsupported serial console device: $serial_console" ;;
+	esac
+	if [[ "$serial_console" != ttyFIQ* ]]; then
+		grep -q "^${option}=y" "$kernel_build/.config" \
+			|| die "$serial_console requires ${option}=y."
+	fi
+
+	if [[ "${boot_mode:-}" == grub ]]; then
+		local required_efi_options=(
+			CONFIG_EFI CONFIG_EFI_STUB CONFIG_EFI_PARTITION CONFIG_ACPI CONFIG_PCI
+			CONFIG_PCI_HOST_GENERIC
+			CONFIG_VIRTIO CONFIG_VIRTIO_BLK CONFIG_VIRTIO_PCI
+			CONFIG_SERIAL_AMBA_PL011 CONFIG_SERIAL_AMBA_PL011_CONSOLE
+		)
+		for option in "${required_efi_options[@]}"; do
+			grep -q "^${option}=y" "$kernel_build/.config" \
+				|| die "EFI board kernel configuration requires ${option}=y."
+		done
+	fi
 }
 
 build_kernel() {
@@ -205,6 +251,10 @@ stage_kernel_package() {
 	make -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" \
 		AWK="${AWK:-mawk}" \
 		INSTALL_DTBS_PATH="$package_stage/boot/dtbs-$kernel_flavor" dtbs_install
+	if [[ "$dtb_name" != none ]]; then
+		[[ -s "$package_stage/boot/dtbs-$kernel_flavor/$dtb_name.dtb" ]] \
+			|| die "Configured board DTB was not built: $dtb_name.dtb"
+	fi
 
 	install -Dm644 "$kernel_build/include/config/kernel.release" \
 		"$package_stage/usr/share/kernel/$kernel_flavor/kernel.release"

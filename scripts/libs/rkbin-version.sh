@@ -42,8 +42,16 @@ case "$soc" in
 	*) die "Unsupported Rockchip SoC for rkbin: $soc" ;;
 esac
 
+# A board may select a known-good historical DDR blob without also downgrading
+# BL31 and every other rkbin artifact. The pinned clone retains full history,
+# so fetch_rkbin can materialize that one path with git-show.
+atf_bin="${rkbin_atf_bin:-$atf_bin}"
+tpl_bin="${rkbin_tpl_bin:-$tpl_bin}"
+tpl_revision="${rkbin_tpl_revision:-$RKBIN_SOURCE_VERSION}"
+
 fetch_rkbin() {
 	local directory="$work_dir/rkbin"
+	local temporary_blob
 	if [[ -d "$directory" ]]; then
 		local revision
 		revision="$(git -C "$directory" rev-parse HEAD 2>/dev/null || true)"
@@ -56,6 +64,20 @@ fetch_rkbin() {
 		log_info "Fetching pinned Rockchip rkbin revision $RKBIN_SOURCE_VERSION"
 		git clone --filter=blob:none "$RKBIN_SOURCE_URL" "$directory"
 		git -C "$directory" -c advice.detachedHead=false checkout "$RKBIN_SOURCE_VERSION"
+	fi
+	if [[ ! -f "$directory/$tpl_bin" && "$tpl_revision" != "$RKBIN_SOURCE_VERSION" ]]; then
+		[[ "$tpl_revision" =~ ^[0-9a-f]{40}$ ]] \
+			|| die "rkbin_tpl_revision must be a full 40-character commit ID."
+		log_info "Extracting compatibility TPL $tpl_bin from rkbin $tpl_revision"
+		mkdir -p "$(dirname "$directory/$tpl_bin")"
+		temporary_blob="$directory/$tpl_bin.alpine-sbc.tmp"
+		rm -f "$temporary_blob"
+		if ! git -C "$directory" show "$tpl_revision:$tpl_bin" > "$temporary_blob"; then
+			rm -f "$temporary_blob"
+			die "Unable to extract rkbin TPL $tpl_bin from $tpl_revision."
+		fi
+		[[ -s "$temporary_blob" ]] || die "Extracted rkbin TPL is empty: $tpl_bin"
+		mv "$temporary_blob" "$directory/$tpl_bin"
 	fi
 	[[ -f "$directory/$tpl_bin" ]] || die "rkbin TPL not found: $tpl_bin"
 	[[ -f "$directory/$atf_bin" ]] || die "rkbin BL31 not found: $atf_bin"

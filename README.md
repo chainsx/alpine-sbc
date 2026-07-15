@@ -1,88 +1,113 @@
 # alpine-sbc
 
-在 **arm64 Alpine Linux host** 上，为 arm64 单板计算机原生构建 U-Boot、Linux
-内核 Alpine 包、rootfs 和可写盘镜像。
+Build bootable Alpine Linux images for ARM64 single-board computers on a native
+ARM64 Alpine host. The project builds U-Boot, board kernels, signed Alpine kernel
+packages, a root filesystem, and the final disk image.
 
-内核打包布局对齐 Alpine 官方 `main/linux-lts`：
+## Requirements
 
-- `linux-sbc-<board>`：内核、模块、System.map、配置和 DTB；
-- `linux-sbc-<board>-dev`：构建第三方内核模块所需的 headers、scripts、
-  `Module.symvers`、可用时的 `vmlinux.h` 和 `/lib/modules/<release>/build`；
-- `linux-sbc-<board>-doc`：内核文档；
-- dev 包依赖 Alpine 官方 `linux-headers`，项目不会覆盖官方同名包；
-- 主包依赖官方虚拟包 `initramfs-generator` 和 `linux-firmware-any`；
-- APK 和本地 `APKINDEX.tar.gz` 均使用项目构建密钥签名，rootfs 不使用
-  `--allow-untrusted`。
+- Alpine Linux on an ARM64/aarch64 host
+- Root privileges for packages, chroot, loop devices, and mounts
+- At least 30 GiB of free disk space
+- Network access to Alpine mirrors and the Git repositories selected by a board
 
-## 构建环境
-
-- Alpine Linux arm64/aarch64 host；
-- root 权限（安装依赖、chroot、loop device 和 mount）；
-- 建议至少 30 GiB 可用磁盘空间；
-- 能访问板级配置引用的 Git 仓库和 Alpine 镜像。
-
-完整构建：
+## Quick start
 
 ```sh
 sudo ./build.sh --board extlinux-arm64 --version 3.23.0
 ```
 
-首次运行会通过 `apk` 安装构建依赖。常用选项：
-
-```text
---clean               删除 build/ 后完整重建
---jobs N              编译并行度
---mirror URL          Alpine 镜像根地址
---skip-deps           不执行 apk add
---skip-bootloader     复用 build/u-boot
---skip-kernel         复用 build/packages
---skip-rootfs         复用 build/rootfs
---skip-image          只生成到 rootfs
-```
-
-默认开发镜像允许 root 在串口控制台无密码登录，但 SSH 密码登录保持关闭。
-需要控制台密码时，在调用前设置环境变量（不要把密码提交到仓库）：
+Build the ARM64 EFI/GRUB image for QEMU:
 
 ```sh
-sudo env ALPINE_SBC_ROOT_PASSWORD='change-me' \
-  ./build.sh --board khadas-vim3 --version 3.23.0
+sudo ./build.sh --board efi-arm64 --version 3.23.0
 ```
 
-产物位于：
+Useful options:
 
 ```text
-build/packages/aarch64/            已签名的内核 APK 和 APKINDEX
-build/keys/alpine-sbc.rsa.pub      本地仓库公钥
-build/rootfs/                       已安装内核的 Alpine rootfs
-build/output/*.img.xz              压缩磁盘镜像
-build/output/*.img.xz.sha256       镜像校验值
-build/log/*.log                    构建日志
+--clean               Remove generated build state
+--jobs N              Set parallel build jobs
+--mirror URL          Select an Alpine mirror
+--skip-deps           Do not install host dependencies
+--skip-bootloader     Reuse the bootloader build
+--skip-kernel         Reuse signed kernel packages
+--skip-rootfs         Reuse the root filesystem
+--skip-image          Stop before image generation
 ```
 
-## 单独执行阶段
+Generated files are stored below `build/`:
 
-阶段脚本都支持 `--help`，并可独立运行：
+```text
+packages/aarch64/             Signed kernel APKs and APKINDEX
+keys/alpine-sbc.rsa.pub       Local repository public key
+rootfs/                       Alpine root filesystem
+output/*.img.xz               Compressed disk images
+output/*.img.xz.sha256        Image checksums
+output/*.img.layout           Final partition layout
+bootloader-artifacts.sha256   Boot firmware artifact manifest
+log/*.log                     Stage logs
+```
+
+## Boot paths
+
+| Platform | Boot path |
+| --- | --- |
+| Rockchip | BootROM → DDR TPL/SPL → BL31 + U-Boot FIT → extlinux → kernel/initramfs/DTB |
+| Amlogic | BootROM → signed vendor FIP → U-Boot → extlinux → kernel |
+| STM32MP2 | BootROM → redundant TF-A BL2 → FIP containing BL31, OP-TEE, and U-Boot → extlinux → kernel/DTB |
+| QEMU extlinux | External U-Boot → standard boot/extlinux → kernel/initramfs |
+| QEMU EFI | U-Boot EFI or EDK2 → `BOOTAA64.EFI` → GRUB → kernel/initramfs |
+
+STM32MP2 images use two redundant `fsbla*` partitions, one 4 MiB `fip`
+partition, and `u-boot-env`. The build explicitly sets `PSA_FWU_SUPPORT=0` and
+therefore does not create misleading FWU metadata or A/B slots. A future A/B
+implementation must enable TF-A FWU and generate matching metadata and GPT
+partition UUIDs as one atomic change.
+
+Bootloader artifacts are checked for presence and size before raw writes.
+Kernel configuration checks require built-in root filesystem, devtmpfs,
+initramfs, and board console support. The configured DTB must exist in the
+staged kernel package.
+
+## Kernel packages
+
+The package layout follows Alpine's `linux-lts` conventions:
+
+- `linux-sbc-<board>`: kernel, modules, config, System.map, and DTBs
+- `linux-sbc-<board>-dev`: external-module headers and `Module.symvers`
+- `linux-sbc-<board>-doc`: kernel documentation
+
+The development package depends on Alpine's official `linux-headers` package.
+All local APKs and `APKINDEX.tar.gz` are signed; the rootfs does not use
+`--allow-untrusted`.
+
+## QEMU EFI testing
+
+After building `efi-arm64`, boot it with the project U-Boot:
 
 ```sh
-sudo scripts/mkbootloader.sh --board firefly-rk3568-roc-pc --jobs 8
-scripts/mklinux.sh --board firefly-rk3568-roc-pc --jobs 8
-scripts/libs/kernel-pkg.sh --board firefly-rk3568-roc-pc
-sudo scripts/mkrootfs.sh --board firefly-rk3568-roc-pc \
-  --version 3.23.0 --arch aarch64
-sudo scripts/mkimage.sh --board firefly-rk3568-roc-pc \
-  --name alpine-firefly-rk3568-roc-pc-3.23.0-aarch64
+extra/scripts/run-qemu.sh --firmware u-boot
 ```
 
-## 新增开发板
+Or with Alpine AAVMF/EDK2:
 
-在 `boards/<name>.config` 中至少定义：
+```sh
+extra/scripts/run-qemu.sh --firmware edk2
+```
+
+Use `--dry-run` to print the QEMU command. Secure Boot is not enabled.
+
+## Adding a board
+
+Create `boards/<name>.config` with at least:
 
 ```sh
 arch="arm64"
 rootfs_arch="aarch64"
-platform="rockchip64"       # qemu/rockchip64/amlogic/stm32mp2/...
+platform="rockchip64"
 boot_mode="extlinux"
-bootargs="... root=LABEL=rootfs ..."
+bootargs="console=ttyS2,1500000 root=LABEL=rootfs rootwait rw"
 
 bootloader_url="..."
 bootloader_branch="..."
@@ -91,76 +116,47 @@ bootloader_config="..._defconfig"
 kernel_url="..."
 kernel_branch="..."
 kernel_config="linux-....config"
-dtb_name="vendor/board"     # 不带 .dtb；无 DTB 时为 none
+dtb_name="vendor/board"
 
+serial_console="ttyS2"
+serial_baud="1500000"
 part_table="gpt"
-boot_size="256"             # MiB
+boot_size="256"
 ```
 
-默认 kernel flavor 为 `sbc-<board>`，可以用 `kernel_flavor` 覆盖；名称必须适合
-APK 包名和内核 release 后缀。`kernel_pkgrel` 默认为 `0`，只修改打包内容而不变更
-上游 kernel version 时应递增它。`kernel_firmware_packages` 可指定板级固件包；未设置
-时会按 platform 选择 `linux-firmware-rockchip`、`linux-firmware-amlogic` 或
-`linux-firmware-none`，从而明确满足官方 `linux-firmware-any` 虚拟依赖。
+Board and generic patches are loaded from `patches/{u-boot,kernel,atf}/`.
 
-补丁和覆盖文件按以下顺序应用：
+## Supported configurations
 
-```text
-patches/kernel/<ref>/{patches,files}
-patches/kernel/<ref>/generic/{patches,files}
-patches/kernel/<ref>/<board>/{patches,files}
-patches/u-boot/<ref>/generic/{patches,files}
-patches/u-boot/<ref>/<board>/{patches,files}
-```
-
-## 内核包兼容性
-
-主包中的 ABI 形如 `6.12.60-0-sbc-khadas-vim3`，布局包括：
-
-```text
-/boot/vmlinuz-sbc-khadas-vim3
-/boot/System.map-<ABI>
-/boot/config-<ABI>
-/boot/dtbs-sbc-khadas-vim3/
-/lib/modules/<ABI>/kernel-suffix
-/usr/share/kernel/sbc-khadas-vim3/kernel.release
-```
-
-`kernel-suffix` 和 flavor 化文件名供 Alpine 官方 `mkinitfs` trigger 使用。镜像脚本会
-在生成前检查内核、initramfs 和板级 DTB，缺少任一必需产物都会立即失败。
-
-安装第三方模块构建环境：
-
-```sh
-apk add linux-sbc-<board>-dev build-base
-```
-
-## 验证
-
-无需 arm64 编译即可运行静态检查：
-
-```sh
-make test
-shellcheck build.sh scripts/*.sh scripts/libs/*.sh tests/*.sh
-```
-
-完整内核、rootfs 和镜像验证必须在 arm64 Alpine host 上进行。
-
-## 支持的配置
-
-- `100ask-dshanpi-r1`
 - `100ask-dshanpi-a1`
+- `100ask-dshanpi-r1`
+- `efi-arm64`
+- `extlinux-arm64`
 - `firefly-rk3566-roc-pc`
 - `firefly-rk3568-roc-pc`
 - `firefly-rk3588s-roc-pc`
-- `sakurapi-rk3308b`
 - `khadas-vim3`
 - `myb-stm32mp257x-1GB`
-- `extlinux-arm64`（QEMU virt）
+- `sakurapi-rk3308b`
 
-## 参考
+## Validation
 
-- [Alpine Linux](https://www.alpinelinux.org/)
+Run host-independent checks with:
+
+```sh
+make test
+shellcheck -x build.sh scripts/*.sh scripts/libs/*.sh extra/scripts/*.sh tests/*.sh
+```
+
+Full compilation and hardware boot testing require an ARM64 Alpine host.
+See [STARTUP_CHAIN_AUDIT.md](STARTUP_CHAIN_AUDIT.md) for the audited upstream
+base, startup-chain fixes, and validation scope.
+
+## References
+
 - [Alpine aports: linux-lts](https://gitlab.alpinelinux.org/alpine/aports/-/tree/master/main/linux-lts)
-- [Alpine aports: linux-headers](https://gitlab.alpinelinux.org/alpine/aports/-/tree/master/main/linux-headers)
-- [Alpine abuild](https://wiki.alpinelinux.org/wiki/Abuild_and_Helpers)
+- [Alpine image scripts](https://gitlab.alpinelinux.org/alpine/aports/-/blob/master/scripts/mkimg.base.sh)
+- [chainsx/build STM32MP2 branch](https://github.com/chainsx/build/tree/stm32mp2)
+- [Armbian Rockchip boot implementation](https://github.com/armbian/build/blob/main/config/sources/families/include/rockchip64_common.inc)
+- [ST STM32CubeProgrammer FlashLayout](https://wiki.st.com/stm32mpu/wiki/STM32CubeProgrammer_flashlayout)
+- [ST manual bootloader update](https://wiki.st.com/stm32mpu/wiki/How_to_manually_update_bootloaders)

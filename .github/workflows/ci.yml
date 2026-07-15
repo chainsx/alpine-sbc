@@ -17,4 +17,4 @@ jobs:
       - name: Static tests
         run: bash tests/test-static.sh
       - name: ShellCheck
-        run: shellcheck -x build.sh scripts/*.sh scripts/libs/*.sh tests/*.sh
+        run: shellcheck -x build.sh scripts/*.sh scripts/libs/*.sh extra/scripts/*.sh tests/*.sh

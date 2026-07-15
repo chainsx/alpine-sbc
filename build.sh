@@ -33,6 +33,7 @@ mirror=https://dl-cdn.alpinelinux.org
 jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')"
 arch=""
 rootfs_arch=""
+boot_mode=""
 clean=0
 install_deps=1
 build_bootloader=1
@@ -86,7 +87,7 @@ enable_error_trap
 
 if (( install_deps )); then
 	log_info "Installing Alpine build dependencies"
-	apk add --no-cache \
+	host_dependencies=(
 		alpine-sdk abuild bash bc binutils bison bpftool build-base ca-certificates cmake cpio \
 		coreutils curl diffutils dosfstools dtc e2fsprogs e2fsprogs-extra \
 		elfutils-dev findutils flex git gmp-dev grep libarchive-tools linux-headers \
@@ -94,6 +95,11 @@ if (( install_deps )); then
 		gptfdisk perl py3-cryptography py3-elftools py3-pillow py3-setuptools \
 		python3 python3-dev rsync sed shadow \
 		swig tar util-linux wget xz zstd
+	)
+	if [[ "$boot_mode" == grub ]]; then
+		host_dependencies+=(grub grub-efi aavmf qemu-system-aarch64)
+	fi
+	apk add --no-cache "${host_dependencies[@]}"
 else
 	log_warn "Dependency installation skipped"
 fi

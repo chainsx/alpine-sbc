@@ -24,6 +24,7 @@ boot_size=""
 part_table=""
 bootargs=""
 boot_mode=""
+platform=""
 KERNEL_FLAVOR=""
 while (($#)); do
 	case "$1" in
@@ -46,10 +47,27 @@ done
 init_logging image
 enable_error_trap
 require_root
-require_commands awk du mount mountpoint umount parted losetup mkfs.vfat mkfs.ext4 \
-	rsync sha256sum sync truncate xz
+require_commands awk dd du mount mountpoint umount parted losetup mkfs.vfat mkfs.ext4 \
+	rsync sha256sum stat sync truncate xz
 load_board_config "$board"
 require_board_variables platform boot_mode bootargs part_table boot_size dtb_name
+
+if [[ "$part_table" == gpt ]]; then
+	require_commands sgdisk
+fi
+if [[ "$platform" == stm32mp2 ]]; then
+	[[ "$part_table" == gpt ]] || die "STM32MP2 SD boot requires a GPT partition table."
+	[[ "$boot_mode" == extlinux ]] || die "STM32MP2 currently requires extlinux boot mode."
+fi
+
+case "$boot_mode" in
+	extlinux) ;;
+	grub)
+		[[ "$part_table" == gpt ]] || die "GRUB EFI boot mode requires a GPT partition table."
+		require_commands grub-mkimage
+		;;
+	*) die "Unsupported boot mode: $boot_mode" ;;
+esac
 
 package_manifest="$WORK_DIR/packages/kernel-packages.env"
 [[ -f "$package_manifest" ]] || die "Kernel package manifest is missing."
@@ -83,6 +101,8 @@ case "$part_table" in gpt | msdos) ;; *) die "Unsupported partition table: $part
 
 # shellcheck source=scripts/libs/bootloader-install.sh
 source "$PROJECT_ROOT/scripts/libs/bootloader-install.sh"
+# shellcheck source=scripts/libs/boot-config.sh
+source "$PROJECT_ROOT/scripts/libs/boot-config.sh"
 
 cleanup_image() {
 	local rc=$?
@@ -110,26 +130,6 @@ wait_for_path() {
 	[[ -b "$path" ]] || die "Partition device did not appear: $path"
 }
 
-generate_extlinux() {
-	local directory="$1"
-	mkdir -p "$directory/extlinux"
-	{
-		printf 'default Alpine\n'
-		printf 'timeout 30\n\n'
-		printf 'label Alpine\n'
-		printf '  kernel /vmlinuz-%s\n' "$KERNEL_FLAVOR"
-		if [[ "${initrd:-yes}" == yes ]]; then
-			printf '  initrd /initramfs-%s\n' "$KERNEL_FLAVOR"
-		fi
-		if [[ "$dtb_name" != none ]]; then
-			printf '  fdt /dtbs-%s/%s.dtb\n' "$KERNEL_FLAVOR" "$dtb_name"
-		fi
-		printf '  append %s\n' "$bootargs"
-	} > "$directory/extlinux/extlinux.conf"
-}
-
-[[ "$boot_mode" == extlinux ]] || die "Only extlinux boot mode is currently implemented."
-
 root_mib="$(du -sm "$rootfs_dir" | awk '{print $1}')"
 boot_mib="$(du -sm "$rootfs_dir/boot" | awk '{print $1}')"
 (( boot_mib + 32 <= boot_size )) \
@@ -144,18 +144,64 @@ truncate -s "${image_mib}M" "$image_file"
 boot_start=32768
 boot_end=$((boot_start + boot_size * 2048 - 1))
 parted -s "$image_file" mklabel "$part_table"
+
+boot_partition_number=1
+root_partition_number=2
+if [[ "$platform" == stm32mp2 ]]; then
+	# STM32MP2 ROM code locates TF-A by the fsbla* GPT name. This board
+	# deliberately builds TF-A with PSA_FWU_SUPPORT=0, so ST requires the
+	# next-stage partition to be named "fip" (not fip-a/fip-b). Keep two
+	# ROM-level FSBL copies, one 4 MiB FIP, and the U-Boot environment.
+	parted -s "$image_file" unit s mkpart fsbla1 34s 545s
+	parted -s "$image_file" unit s mkpart fsbla2 546s 1057s
+	parted -s "$image_file" unit s mkpart fip 1058s 9249s
+	parted -s "$image_file" unit s mkpart u-boot-env 9250s 10273s
+	boot_partition_number=5
+	root_partition_number=6
+	sgdisk \
+		--change-name=1:fsbla1 \
+		--change-name=2:fsbla2 \
+		--change-name=3:fip \
+		--typecode=3:19D5DF83-11B0-457B-BE2C-7559C13142A5 \
+		--change-name=4:u-boot-env \
+		--typecode=4:3DE21764-95DB-54BD-A5C3-4ABE786F38A8 \
+		"$image_file" >/dev/null
+fi
+
 parted -s "$image_file" unit s mkpart primary fat32 "${boot_start}s" "${boot_end}s"
-parted -s "$image_file" set 1 boot on
+if [[ "$boot_mode" == grub ]]; then
+	parted -s "$image_file" set "$boot_partition_number" esp on
+else
+	parted -s "$image_file" set "$boot_partition_number" boot on
+fi
 parted -s "$image_file" unit s mkpart primary ext4 "$((boot_end + 1))s" 100%
+
+if [[ "$part_table" == gpt ]]; then
+	sgdisk --verify "$image_file"
+fi
+log_info "Partition layout"
+parted -s "$image_file" unit s print
 
 device="$(losetup --find --show --partscan "$image_file")"
 # Used by the sourced bootloader installation function.
 # shellcheck disable=SC2034
 loopX="${device##*/}"
-boot_partition="${device}p1"
-root_partition="${device}p2"
+boot_partition="${device}p${boot_partition_number}"
+root_partition="${device}p${root_partition_number}"
 wait_for_path "$boot_partition"
 wait_for_path "$root_partition"
+if [[ "$platform" == stm32mp2 ]]; then
+	# Used by scripts/libs/bootloader-install.sh.
+	# shellcheck disable=SC2034
+	stm32_fsbl_partition1="${device}p1"
+	# shellcheck disable=SC2034
+	stm32_fsbl_partition2="${device}p2"
+	# shellcheck disable=SC2034
+	stm32_fip_partition="${device}p3"
+	wait_for_path "$stm32_fsbl_partition1"
+	wait_for_path "$stm32_fsbl_partition2"
+	wait_for_path "$stm32_fip_partition"
+fi
 
 mkfs.vfat -F 32 -n bootfs "$boot_partition"
 mkfs.ext4 -F -L rootfs "$root_partition"
@@ -169,7 +215,15 @@ mkdir -p "$root_mount/boot"
 
 log_info "Copying boot filesystem"
 rsync -rtD --delete "$rootfs_dir/boot/" "$boot_mount/"
-generate_extlinux "$boot_mount"
+case "$boot_mode" in
+	extlinux)
+		generate_extlinux_config "$boot_mount"
+		;;
+	grub)
+		generate_grub_config "$boot_mount"
+		install_grub_arm64_efi "$boot_mount"
+		;;
+esac
 sync
 
 umount "$boot_mount"
@@ -181,8 +235,14 @@ losetup -d "$device"
 device=""
 
 rm -f "$output_dir/$name.img" "$output_dir/$name.img.xz" \
-	"$output_dir/$name.img.xz.sha256"
+	"$output_dir/$name.img.xz.sha256" "$output_dir/$name.img.layout"
 mv "$image_file" "$output_dir/$name.img"
+{
+	parted -s "$output_dir/$name.img" unit s print
+	if [[ "$part_table" == gpt ]]; then
+		sgdisk --print "$output_dir/$name.img"
+	fi
+} > "$output_dir/$name.img.layout"
 log_info "Compressing image with xz"
 xz -T0 -f "$output_dir/$name.img"
 (

@@ -163,7 +163,7 @@ if [[ -z "$kernel_firmware_packages" ]]; then
 	case "$platform" in
 		rockchip64) kernel_firmware_packages="linux-firmware-rockchip" ;;
 		amlogic) kernel_firmware_packages="linux-firmware-amlogic" ;;
-		qemu | stm32mp2) kernel_firmware_packages="linux-firmware-none" ;;
+		qemu | efi-arm64 | stm32mp2) kernel_firmware_packages="linux-firmware-none" ;;
 		*) kernel_firmware_packages="linux-firmware-other" ;;
 	esac
 fi
@@ -236,6 +236,27 @@ EOF
 	ln -sfn /usr/share/zoneinfo/Asia/Singapore "$rootfs/etc/localtime"
 	printf '%s\n' Asia/Singapore > "$rootfs/etc/timezone"
 
+	if [[ -n "${serial_console:-}" ]]; then
+		[[ "$serial_console" =~ ^[A-Za-z0-9._-]+$ ]] \
+			|| die "Invalid serial_console value: $serial_console"
+		serial_baud="${serial_baud:-115200}"
+		[[ "$serial_baud" =~ ^[1-9][0-9]*$ ]] \
+			|| die "Invalid serial_baud value: $serial_baud"
+		# Remove serial getty entries created by older alpine-sbc builds so
+		# --keep-rootfs can safely switch boards or corrected console names.
+		sed -i -E \
+			'/^(ttyAMA[0-9]+|ttyFIQ[0-9]+|ttyAML[0-9]+|ttySTM[0-9]+|ttyS[0-9]+)::respawn:\/sbin\/getty -L [0-9]+ [A-Za-z0-9._-]+ vt100( # alpine-sbc)?$/d' \
+			"$rootfs/etc/inittab"
+		printf '%s::respawn:/sbin/getty -L %s %s vt100 # alpine-sbc\n' \
+			"$serial_console" "$serial_baud" "$serial_console" \
+			>> "$rootfs/etc/inittab"
+		if [[ -f "$rootfs/etc/securetty" ]] \
+			&& ! grep -Fxq "$serial_console" "$rootfs/etc/securetty"; then
+			printf '%s\n' "$serial_console" >> "$rootfs/etc/securetty"
+		fi
+		log_info "Enabled serial console getty on $serial_console at $serial_baud baud"
+	fi
+
 	sed -i -E \
 		-e 's/^[#[:space:]]*PermitRootLogin.*/PermitRootLogin prohibit-password/' \
 		-e 's/^[#[:space:]]*PasswordAuthentication.*/PasswordAuthentication no/' \
@@ -257,6 +278,8 @@ EOF
 BOARD=$board
 KERNEL_FLAVOR=$KERNEL_FLAVOR
 KERNEL_RELEASE=$KERNEL_ABI_RELEASE
+SERIAL_CONSOLE=${serial_console:-none}
+SERIAL_BAUD=${serial_baud:-none}
 EOF
 
 	rm -rf "$rootfs/tmp/alpine-sbc-repository" "$rootfs/var/cache/apk"/*

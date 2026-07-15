@@ -5,14 +5,26 @@
 [[ -n "${optee_branch:-}" ]] || die "Board configuration does not define optee_branch."
 
 optee_extra_config="${optee_extra_config:-}"
+optee_directory="$work_dir/optee-src"
+optee_source_state="$optee_directory/.alpine-sbc-source"
+optee_expected_state="url=$optee_url
+ref=$optee_branch
+board=$board
+config=$optee_extra_config"
 
 fetch_optee() {
-	local directory="$work_dir/optee-src"
-	if [[ ! -d "$directory" ]]; then
+	if [[ -d "$optee_directory" ]] && { (( force_fetch )) \
+		|| [[ ! -f "$optee_source_state" ]] \
+		|| [[ "$(cat "$optee_source_state")" != "$optee_expected_state" ]]; }; then
+		log_warn "Replacing cached OP-TEE source because its source, board, or build configuration changed"
+		safe_remove_tree "$optee_directory"
+	fi
+	if [[ ! -d "$optee_directory" ]]; then
 		log_info "Cloning OP-TEE '$optee_branch' from $optee_url"
-		git clone --depth=1 --branch "$optee_branch" "$optee_url" "$directory"
+		git clone --depth=1 --branch "$optee_branch" "$optee_url" "$optee_directory"
+		printf '%s\n' "$optee_expected_state" > "$optee_source_state"
 	else
-		log_info "Using cached OP-TEE source: $directory"
+		log_info "Using cached OP-TEE source: $optee_directory"
 	fi
 }
 
@@ -30,7 +42,7 @@ compile_optee() {
 	log_info "Building OP-TEE"
 	# Board configuration values are trusted make assignments, intentionally split.
 	# shellcheck disable=SC2086
-	PATH="$PATH:$tool_dir" make -C "$work_dir/optee-src" -j"$jobs" ARCH=arm \
+	PATH="$PATH:$tool_dir" make -C "$optee_directory" -j"$jobs" ARCH=arm \
 		CROSS_COMPILE_core=aarch64-alpine-linux-musl- \
 		CROSS_COMPILE_ta_arm64=aarch64-alpine-linux-musl- \
 		$optee_extra_config

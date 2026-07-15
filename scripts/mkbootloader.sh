@@ -20,6 +20,7 @@ arch=""
 bootloader_url=""
 bootloader_branch=""
 bootloader_config=""
+platform=""
 while (($#)); do
 	case "$1" in
 		--board | --jobs)
@@ -94,6 +95,45 @@ patch_uboot() {
 	printf '%s\n' "$expected_state" > "$source_state"
 }
 
+validate_bootloader_artifacts() {
+	local artifacts=()
+	local artifact
+	case "$platform" in
+		qemu | efi-arm64)
+			artifacts+=("$uboot_dir/u-boot.bin")
+			;;
+		rockchip64)
+			artifacts+=("$uboot_dir/idbloader.img" "$uboot_dir/u-boot.itb")
+			;;
+		allwinner)
+			artifacts+=("$uboot_dir/u-boot-sunxi-with-spl.bin")
+			;;
+		amlogic)
+			artifacts+=("$uboot_dir/output/u-boot.bin.sd.bin")
+			;;
+		stm32mp2)
+			artifacts+=(
+				"$WORK_DIR/atf-src/build/stm32mp2/release/tf-a-$board.stm32"
+				"$WORK_DIR/atf-src/build/stm32mp2/release/fip.bin"
+				"$WORK_DIR/atf-src/build/stm32mp2/release/fip.info"
+			)
+			;;
+		phytium)
+			artifacts+=("$uboot_dir/fip-all-sd-boot.bin")
+			;;
+		*) die "No bootloader artifact validation is defined for platform: $platform" ;;
+	esac
+
+	bootloader_manifest="$WORK_DIR/bootloader-artifacts.sha256"
+	: > "$bootloader_manifest"
+	for artifact in "${artifacts[@]}"; do
+		[[ -s "$artifact" ]] || die "Required bootloader artifact is missing or empty: $artifact"
+		sha256sum "$artifact" >> "$bootloader_manifest"
+		log_info "Validated bootloader artifact: ${artifact#"$WORK_DIR"/}"
+	done
+	log_info "Bootloader artifact manifest: $bootloader_manifest"
+}
+
 fetch_uboot
 patch_uboot
 
@@ -116,9 +156,31 @@ fi
 
 log_info "Configuring U-Boot with $bootloader_config"
 make -C "$uboot_dir" "$bootloader_config"
+if [[ "${boot_mode:-}" == extlinux ]]; then
+	if ! grep -q '^CONFIG_DISTRO_DEFAULTS=y' "$uboot_dir/.config"; then
+		grep -q '^CONFIG_BOOTSTD=y' "$uboot_dir/.config" \
+			|| die "U-Boot configuration cannot scan an extlinux boot filesystem."
+		grep -q '^CONFIG_BOOTMETH_EXTLINUX=y' "$uboot_dir/.config" \
+			|| die "U-Boot configuration does not enable the extlinux boot method."
+	fi
+fi
+if [[ "$platform" == efi-arm64 ]]; then
+	grep -q '^CONFIG_EFI_LOADER=y' "$uboot_dir/.config" \
+		|| die "U-Boot configuration does not enable CONFIG_EFI_LOADER."
+	grep -q '^CONFIG_BOOTSTD=y' "$uboot_dir/.config" \
+		|| die "U-Boot configuration does not enable CONFIG_BOOTSTD."
+	grep -q '^CONFIG_BOOTSTD_DEFAULTS=y' "$uboot_dir/.config" \
+		|| die "U-Boot configuration does not enable EFI-aware standard boot defaults."
+	grep -q '^CONFIG_BOOTMETH_EFILOADER=y' "$uboot_dir/.config" \
+		|| die "U-Boot configuration does not enable the EFI boot method."
+fi
 # Board configuration values are trusted make assignments, intentionally split.
 # shellcheck disable=SC2086
 make -C "$uboot_dir" -j"$jobs" $uboot_extra_config
+
+if [[ "$platform" == efi-arm64 ]]; then
+	[[ -s "$uboot_dir/u-boot.bin" ]] || die "U-Boot EFI firmware image was not produced."
+fi
 
 if [[ "${optee_compile:-no}" == yes ]]; then
 	# shellcheck source=scripts/libs/optee-compile.sh
@@ -137,4 +199,5 @@ if [[ "${atf_compile:-no}" == no && "${amlogic_boot_fip:-no}" == yes ]]; then
 	mk_amlogic_fip
 fi
 
+validate_bootloader_artifacts
 log_info "Bootloader build complete: $uboot_dir"
