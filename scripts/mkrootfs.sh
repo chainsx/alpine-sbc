@@ -65,7 +65,7 @@ done
 init_logging rootfs
 enable_error_trap
 require_root
-require_commands wget sha256sum tar chroot mount mountpoint umount rsync
+require_commands awk chroot cpio gzip mount mountpoint rsync sha256sum tar umount wget
 load_board_config "$board"
 require_board_variables platform rootfs_arch
 [[ "$rootfs_arch" == "$apk_arch" ]] \
@@ -187,8 +187,12 @@ install_packages() {
 
 	# Installation already invokes Alpine's mkinitfs trigger.  Generate once more
 	# explicitly so trigger failures and stale images from --keep-rootfs are visible.
-	chroot "$rootfs" mkinitfs -o "/boot/initramfs-$KERNEL_FLAVOR" "$KERNEL_ABI_RELEASE"
-	[[ -s "$rootfs/boot/initramfs-$KERNEL_FLAVOR" ]] || die "Initramfs generation failed."
+	chroot "$rootfs" mkinitfs -C gzip \
+		-o "/boot/initramfs-$KERNEL_FLAVOR" "$KERNEL_ABI_RELEASE"
+	local kernel_config="$rootfs/boot/config-$KERNEL_ABI_RELEASE"
+	grep -q '^CONFIG_RD_GZIP=y' "$kernel_config" \
+		|| die "Installed kernel cannot decompress Alpine's gzip initramfs."
+	validate_gzip_initramfs "$rootfs/boot/initramfs-$KERNEL_FLAVOR"
 }
 
 enable_service() {

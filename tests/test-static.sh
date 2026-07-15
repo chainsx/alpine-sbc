@@ -72,7 +72,7 @@ for config in boards/*.config; do
 	[[ "$bootargs" == *"console=$serial_console,"* ]] \
 		|| fail "$config bootargs does not select $serial_console"
 	[[ "$initrd" == yes ]] || fail "$config does not explicitly enable initrd"
-	for option in BLK_DEV_INITRD MODULES DEVTMPFS DEVTMPFS_MOUNT EXT4_FS; do
+	for option in BLK_DEV_INITRD RD_GZIP MODULES DEVTMPFS DEVTMPFS_MOUNT EXT4_FS; do
 		rg -q "^CONFIG_${option}=y$" "configs/kernel/$kernel_config" \
 			|| fail "$config kernel config is missing built-in CONFIG_${option}"
 	done
@@ -97,6 +97,12 @@ for config in boards/*.config; do
 		[[ "$initrd" == yes ]] || fail "$config does not enable an initramfs"
 	fi
 done
+
+rg -q '^CONFIG_INITRAMFS_SOURCE=""$' configs/kernel/linux-generic-arm64-lts.config \
+	|| fail "generic arm64 kernel config retains a host-specific built-in initramfs path"
+rg -Fq 'validate_gzip_initramfs "$rootfs_dir/boot/initramfs-$KERNEL_FLAVOR"' \
+	scripts/mkimage.sh \
+	|| fail "image creation does not inspect the initramfs before packaging"
 
 rg -q '^dtb_name="rockchip/rk3576-100ask-dshanpi-a1"$' \
 	boards/100ask-dshanpi-a1.config || fail "DshanPi A1 does not select its RK3576 DTB"
@@ -134,8 +140,10 @@ rendered_apkbuild=""
 package_test_dir=""
 manifest_test_dir=""
 signing_test_dir=""
+initramfs_test_dir=""
 trap 'rm -f "${rendered_apkbuild:-}"; rm -rf "$boot_config_dir" \
-	"${package_test_dir:-}" "${manifest_test_dir:-}" "${signing_test_dir:-}"' EXIT
+	"${package_test_dir:-}" "${manifest_test_dir:-}" "${signing_test_dir:-}" \
+	"${initramfs_test_dir:-}"' EXIT
 KERNEL_FLAVOR="sbc-test-board"
 bootargs="console=ttyS2,1500000 root=LABEL=rootfs rootwait rw"
 dtb_name="rockchip/test-board"
@@ -275,6 +283,19 @@ cmp -s "$signing_test_dir/test.rsa.pub" "$signing_test_dir/trusted/test.rsa.pub"
 rg -Fq 'prepare_apk_signing_key "$private_key" "$public_key" /etc/apk/keys' \
 	scripts/libs/kernel-pkg.sh \
 	|| fail "kernel package builder does not trust its signing key before abuild"
+
+if command -v cpio >/dev/null 2>&1 && command -v gzip >/dev/null 2>&1; then
+	initramfs_test_dir="$(mktemp -d)"
+	mkdir -p "$initramfs_test_dir/tree"
+	printf '#!/bin/sh\nexec /sbin/init\n' > "$initramfs_test_dir/tree/init"
+	chmod 755 "$initramfs_test_dir/tree/init"
+	(
+		cd "$initramfs_test_dir/tree"
+		find . -print | cpio -o -H newc 2>/dev/null | gzip -9 \
+			> "$initramfs_test_dir/initramfs.gz"
+	)
+	validate_gzip_initramfs "$initramfs_test_dir/initramfs.gz"
+fi
 
 for pattern in \
 	'mkpart fsbla1 34s 545s' \

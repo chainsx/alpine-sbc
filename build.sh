@@ -107,8 +107,8 @@ fi
 require_commands apk git make gcc abuild abuild-sign openssl rsync tar xz
 if (( build_image )); then
 	image_commands=(
-		awk dd du losetup mkfs.ext4 mkfs.vfat mknod modprobe mount mountpoint
-		parted rsync sha256sum stat sync truncate umount xz
+		awk cpio dd du gzip losetup mkfs.ext4 mkfs.vfat mknod modprobe mount
+		mountpoint parted rsync sha256sum stat sync truncate umount xz
 	)
 	if [[ "$part_table" == gpt ]]; then image_commands+=(sgdisk); fi
 	if [[ "$boot_mode" == grub ]]; then image_commands+=(grub-mkimage); fi

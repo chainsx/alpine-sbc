@@ -320,6 +320,18 @@ stage_apk_repository() {
 	log_info "Staged APK repository: ${repository_root%/}/$repository_arch"
 }
 
+validate_gzip_initramfs() {
+	local archive="$1"
+	[[ -s "$archive" ]] || die "Initramfs is missing or empty: $archive"
+	gzip -t "$archive" || die "Initramfs is not a valid gzip stream: $archive"
+	if ! gzip -dc "$archive" \
+		| cpio -t 2>/dev/null \
+		| awk '$0 == "init" || $0 == "./init" { found = 1 } END { exit !found }'; then
+		die "Initramfs does not contain the required /init program: $archive"
+	fi
+	log_info "Validated gzip initramfs with /init: $archive"
+}
+
 prepare_apk_signing_key() {
 	local private_key="$1" public_key="$2" trusted_keys_dir="$3"
 	local temporary_public_key="${public_key}.tmp.$$"

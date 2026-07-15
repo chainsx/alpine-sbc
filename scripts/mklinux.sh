@@ -169,8 +169,10 @@ configure_kernel() {
 			|| die "Bootable rootfs requires ${option}=y."
 	done
 	if [[ "$initrd" == yes ]]; then
-		grep -q '^CONFIG_BLK_DEV_INITRD=y' "$kernel_build/.config" \
-			|| die "Board initramfs support requires CONFIG_BLK_DEV_INITRD=y."
+		for option in CONFIG_BLK_DEV_INITRD CONFIG_RD_GZIP; do
+			grep -q "^${option}=y" "$kernel_build/.config" \
+				|| die "Board gzip initramfs support requires ${option}=y."
+		done
 	fi
 
 	case "$serial_console" in

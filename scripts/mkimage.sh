@@ -48,7 +48,7 @@ done
 init_logging image
 enable_error_trap
 require_root
-require_commands awk dd du mount mountpoint umount parted losetup mkfs.vfat mkfs.ext4 \
+require_commands awk cpio dd du gzip mount mountpoint umount parted losetup mkfs.vfat mkfs.ext4 \
 	mknod modprobe rsync sha256sum stat sync truncate xz
 load_board_config "$board"
 require_board_variables platform boot_mode bootargs part_table boot_size dtb_name initrd
@@ -130,7 +130,11 @@ device=""
 [[ -f "$rootfs_dir/boot/vmlinuz-$KERNEL_FLAVOR" ]] \
 	|| die "Kernel image is missing from rootfs."
 if [[ "$initrd" == yes ]]; then
-	[[ -s "$rootfs_dir/boot/initramfs-$KERNEL_FLAVOR" ]] || die "Initramfs is missing from rootfs."
+	kernel_config_file="$rootfs_dir/boot/config-$KERNEL_ABI_RELEASE"
+	[[ -s "$kernel_config_file" ]] || die "Installed kernel config is missing: $kernel_config_file"
+	grep -q '^CONFIG_RD_GZIP=y' "$kernel_config_file" \
+		|| die "Installed kernel cannot decompress Alpine's gzip initramfs."
+	validate_gzip_initramfs "$rootfs_dir/boot/initramfs-$KERNEL_FLAVOR"
 fi
 if [[ "$dtb_name" != none ]]; then
 	[[ -f "$rootfs_dir/boot/dtbs-$KERNEL_FLAVOR/$dtb_name.dtb" ]] \

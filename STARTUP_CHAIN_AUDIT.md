@@ -29,6 +29,8 @@ board against one explicit configuration contract.
   moved all image-tool checks before the time-consuming build stages.
 - Loaded loop support and restored missing loop-control, loop block, and loop
   partition device nodes for minimal Alpine hosts without automatic /dev events.
+- Removed the generic kernel's stale ImmortalWrt built-in initramfs paths,
+  enabled gzip initramfs decompression, and verified every image contains `/init`.
 - Added generated extlinux/GRUB configuration checks and U-Boot capability and
   output-manifest validation.
 - Corrected DshanPi A1 to the RK3576 DTB and pinned its DDR TPL to the known-good
