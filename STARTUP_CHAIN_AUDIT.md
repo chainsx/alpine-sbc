@@ -21,6 +21,8 @@ board against one explicit configuration contract.
   directory before copying the staged kernel, development, or documentation tree.
 - Removed stale APKs from abuild output before packaging, so a reused build tree
   cannot silently republish an older kernel package.
+- Derived the repository public key from the active private key and installed it
+  into the host APK trust store before abuild performs its automatic index update.
 - Added generated extlinux/GRUB configuration checks and U-Boot capability and
   output-manifest validation.
 - Corrected DshanPi A1 to the RK3576 DTB and pinned its DDR TPL to the known-good

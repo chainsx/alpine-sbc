@@ -120,8 +120,9 @@ boot_config_dir="$(mktemp -d)"
 rendered_apkbuild=""
 package_test_dir=""
 manifest_test_dir=""
+signing_test_dir=""
 trap 'rm -f "${rendered_apkbuild:-}"; rm -rf "$boot_config_dir" \
-	"${package_test_dir:-}" "${manifest_test_dir:-}"' EXIT
+	"${package_test_dir:-}" "${manifest_test_dir:-}" "${signing_test_dir:-}"' EXIT
 KERNEL_FLAVOR="sbc-test-board"
 bootargs="console=ttyS2,1500000 root=LABEL=rootfs rootwait rw"
 dtb_name="rockchip/test-board"
@@ -240,6 +241,18 @@ EOF
 load_kernel_package_manifest "$manifest_test_dir/kernel-packages.env" sbc-test-board
 [[ "$KERNEL_ABI_RELEASE" == 6.12.1-0-sbc-test-board ]] \
 	|| fail "kernel package manifest did not export the validated ABI release"
+
+# abuild's automatic repository-index update verifies the newly signed APKs.
+# Exercise the same key derivation and trust installation used by kernel-pkg.sh.
+signing_test_dir="$(mktemp -d)"
+openssl genrsa -out "$signing_test_dir/test.rsa" 2048 >/dev/null 2>&1
+prepare_apk_signing_key "$signing_test_dir/test.rsa" \
+	"$signing_test_dir/test.rsa.pub" "$signing_test_dir/trusted"
+cmp -s "$signing_test_dir/test.rsa.pub" "$signing_test_dir/trusted/test.rsa.pub" \
+	|| fail "APK signing public key was not installed into the trust directory"
+rg -Fq 'prepare_apk_signing_key "$private_key" "$public_key" /etc/apk/keys' \
+	scripts/libs/kernel-pkg.sh \
+	|| fail "kernel package builder does not trust its signing key before abuild"
 
 for pattern in \
 	'mkpart fsbla1 34s 545s' \

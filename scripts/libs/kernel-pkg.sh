@@ -38,8 +38,9 @@ done
 
 init_logging kernel-package
 enable_error_trap
+require_root
 load_board_config "$board"
-require_commands abuild abuild-sign apk openssl sed find
+require_commands abuild abuild-sign apk cmp find install openssl sed
 
 package_root="$WORK_DIR/kernel-pkg"
 metadata_file="$package_root/kernel.env"
@@ -67,12 +68,11 @@ mkdir -p "$key_dir" "$repository_dir"
 if [[ ! -f "$private_key" ]]; then
 	log_info "Generating repository signing key: $private_key"
 	openssl genrsa -out "$private_key" 2048
-	chmod 600 "$private_key"
 fi
-if [[ ! -f "$public_key" ]]; then
-	openssl rsa -in "$private_key" -pubout -out "$public_key"
-	chmod 644 "$public_key"
-fi
+# abuild calls `apk index` after packaging. apk verifies every input APK before
+# indexing it, so the matching public key must already be trusted by the host.
+# This is the same installation step performed by `abuild-keygen --install`.
+prepare_apk_signing_key "$private_key" "$public_key" /etc/apk/keys
 
 escape_sed() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
 sed \

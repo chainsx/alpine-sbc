@@ -305,6 +305,26 @@ load_kernel_package_manifest() {
 	log_info "Validated kernel package repository for $KERNEL_FLAVOR"
 }
 
+prepare_apk_signing_key() {
+	local private_key="$1" public_key="$2" trusted_keys_dir="$3"
+	local temporary_public_key="${public_key}.tmp.$$"
+	local trusted_public_key="$trusted_keys_dir/${public_key##*/}"
+	[[ -s "$private_key" ]] || die "APK signing private key is missing or empty: $private_key"
+	chmod 600 "$private_key"
+	openssl rsa -in "$private_key" -check -noout >/dev/null 2>&1 \
+		|| die "APK signing private key is invalid: $private_key"
+	if ! openssl rsa -in "$private_key" -pubout -out "$temporary_public_key"; then
+		rm -f "$temporary_public_key"
+		die "Could not derive the APK public key from $private_key"
+	fi
+	chmod 644 "$temporary_public_key"
+	mv -f "$temporary_public_key" "$public_key"
+	install -Dm644 "$public_key" "$trusted_public_key"
+	cmp -s "$public_key" "$trusted_public_key" \
+		|| die "APK public key installation failed: $trusted_public_key"
+	log_info "Trusted APK signing key installed: $trusted_public_key"
+}
+
 safe_remove_tree() {
 	local path="$1"
 	[[ -n "$path" && "$path" == "$WORK_DIR"/* && "$path" != "$WORK_DIR" ]] \
