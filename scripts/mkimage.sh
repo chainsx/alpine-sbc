@@ -49,9 +49,51 @@ init_logging image
 enable_error_trap
 require_root
 require_commands awk dd du mount mountpoint umount parted losetup mkfs.vfat mkfs.ext4 \
-	rsync sha256sum stat sync truncate xz
+	mknod modprobe rsync sha256sum stat sync truncate xz
 load_board_config "$board"
 require_board_variables platform boot_mode bootargs part_table boot_size dtb_name initrd
+
+ensure_loop_device_nodes() {
+	local control_sysfs=/sys/class/misc/loop-control/dev
+	local control_node=/dev/loop-control
+	local control_major control_minor index node created=0 free_loop
+	if [[ ! -r "$control_sysfs" ]]; then
+		log_info "Loading the Linux loop device module"
+		modprobe loop
+	fi
+	[[ -r "$control_sysfs" ]] \
+		|| die "The host kernel does not expose /sys/class/misc/loop-control."
+	IFS=: read -r control_major control_minor < "$control_sysfs"
+	[[ "$control_major" =~ ^[0-9]+$ && "$control_minor" =~ ^[0-9]+$ ]] \
+		|| die "Invalid loop-control device number: $control_major:$control_minor"
+	if [[ -e "$control_node" && ! -c "$control_node" ]]; then
+		die "$control_node exists but is not a character device."
+	elif [[ ! -c "$control_node" ]]; then
+		mknod -m 600 "$control_node" c "$control_major" "$control_minor"
+		created=$((created + 1))
+	fi
+
+	# loop-control can allocate loop minors dynamically, but minimal Alpine
+	# hosts and containers do not always populate their matching /dev nodes.
+	# Pre-create a bounded set using Linux's assigned loop block major (7).
+	for ((index=0; index<64; index++)); do
+		node="/dev/loop$index"
+		if [[ -e "$node" && ! -b "$node" ]]; then
+			die "$node exists but is not a block device."
+		elif [[ ! -b "$node" ]]; then
+			mknod -m 660 "$node" b 7 "$index"
+			created=$((created + 1))
+		fi
+	done
+	free_loop="$(losetup --find)" \
+		|| die "No free loop device is available after restoring /dev nodes."
+	[[ -b "$free_loop" ]] || die "Free loop device node is unavailable: $free_loop"
+	if (( created > 0 )); then
+		log_info "Restored $created missing loop device node(s); next free device: $free_loop"
+	else
+		log_info "Loop device nodes are ready; next free device: $free_loop"
+	fi
+}
 
 if [[ "$part_table" == gpt ]]; then
 	require_commands sgdisk
@@ -122,10 +164,23 @@ trap cleanup_image EXIT
 wait_for_path() {
 	local path="$1" attempts=50
 	while [[ ! -b "$path" && $attempts -gt 0 ]]; do
+		restore_block_device_node "$path" || true
 		sleep 0.1
 		attempts=$((attempts - 1))
 	done
 	[[ -b "$path" ]] || die "Partition device did not appear: $path"
+}
+
+restore_block_device_node() {
+	local path="$1" name="${1##*/}" sysfs_device major minor
+	[[ -b "$path" ]] && return 0
+	[[ ! -e "$path" ]] || die "$path exists but is not a block device."
+	sysfs_device="/sys/class/block/$name/dev"
+	[[ -r "$sysfs_device" ]] || return 1
+	IFS=: read -r major minor < "$sysfs_device"
+	[[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || return 1
+	mknod -m 660 "$path" b "$major" "$minor"
+	log_info "Restored missing block device node: $path ($major:$minor)"
 }
 
 root_mib="$(du -sm "$rootfs_dir" | awk '{print $1}')"
@@ -180,6 +235,7 @@ fi
 log_info "Partition layout"
 parted -s "$image_file" unit s print
 
+ensure_loop_device_nodes
 device="$(losetup --find --show --partscan "$image_file")"
 # Used by the sourced bootloader installation function.
 # shellcheck disable=SC2034

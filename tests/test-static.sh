@@ -35,6 +35,12 @@ if rg -q '(^|[[:space:]])gptfdisk([[:space:]\\]|$)' build.sh; then
 fi
 rg -Fq 'image_commands+=(sgdisk)' build.sh \
 	|| fail "the early image-tool preflight does not require sgdisk for GPT"
+rg -q '(^|[[:space:]])kmod([[:space:]\\]|$)' build.sh \
+	|| fail "host dependencies are missing kmod for loop-device setup"
+rg -q '^ensure_loop_device_nodes$' scripts/mkimage.sh \
+	|| fail "image creation does not repair missing loop device nodes"
+rg -Fq 'restore_block_device_node "$path"' scripts/mkimage.sh \
+	|| fail "partition waits do not repair missing loop partition nodes"
 
 for config in boards/*.config; do
 	board="${config##*/}"

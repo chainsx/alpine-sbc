@@ -27,6 +27,8 @@ board against one explicit configuration contract.
   apk's repository-root resolution finds both `APKINDEX.tar.gz` and the APKs.
 - Installed Alpine's split `sgdisk` package instead of its `gptfdisk` parent and
   moved all image-tool checks before the time-consuming build stages.
+- Loaded loop support and restored missing loop-control, loop block, and loop
+  partition device nodes for minimal Alpine hosts without automatic /dev events.
 - Added generated extlinux/GRUB configuration checks and U-Boot capability and
   output-manifest validation.
 - Corrected DshanPi A1 to the RK3576 DTB and pinned its DDR TPL to the known-good
