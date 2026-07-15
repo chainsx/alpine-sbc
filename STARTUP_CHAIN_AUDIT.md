@@ -25,6 +25,8 @@ board against one explicit configuration contract.
   into the host APK trust store before abuild performs its automatic index update.
 - Staged the local kernel repository below its required `aarch64/` directory so
   apk's repository-root resolution finds both `APKINDEX.tar.gz` and the APKs.
+- Installed Alpine's split `sgdisk` package instead of its `gptfdisk` parent and
+  moved all image-tool checks before the time-consuming build stages.
 - Added generated extlinux/GRUB configuration checks and U-Boot capability and
   output-manifest validation.
 - Corrected DshanPi A1 to the RK3576 DTB and pinned its DDR TPL to the known-good

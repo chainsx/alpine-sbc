@@ -92,9 +92,9 @@ if (( install_deps )); then
 		coreutils curl diffutils dosfstools dtc e2fsprogs e2fsprogs-extra \
 		elfutils-dev findutils flex gawk git gmp-dev gnutls-dev grep libarchive-tools linux-headers \
 		mawk mpc1-dev mpfr-dev ncurses-dev openssl openssl-dev pahole parted \
-		gptfdisk perl py3-cryptography py3-elftools py3-pillow py3-setuptools \
+		perl py3-cryptography py3-elftools py3-pillow py3-setuptools \
 		python3 python3-dev rsync sed shadow \
-		swig tar util-linux util-linux-dev wget xz zstd
+		sgdisk swig tar util-linux util-linux-dev wget xz zstd
 	)
 	if [[ "$boot_mode" == grub ]]; then
 		host_dependencies+=(grub grub-efi aavmf qemu-system-aarch64)
@@ -105,6 +105,15 @@ else
 fi
 
 require_commands apk git make gcc abuild abuild-sign openssl rsync tar xz
+if (( build_image )); then
+	image_commands=(
+		awk dd du losetup mkfs.ext4 mkfs.vfat mount mountpoint parted rsync
+		sha256sum stat sync truncate umount xz
+	)
+	if [[ "$part_table" == gpt ]]; then image_commands+=(sgdisk); fi
+	if [[ "$boot_mode" == grub ]]; then image_commands+=(grub-mkimage); fi
+	require_commands "${image_commands[@]}"
+fi
 mkdir -p "$WORK_DIR"
 
 if (( build_bootloader )); then

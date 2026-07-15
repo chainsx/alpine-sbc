@@ -28,6 +28,13 @@ rg -q '(^|[[:space:]])gawk([[:space:]\\]|$)' build.sh \
 	|| fail "host dependencies are missing Alpine's U-Boot gawk dependency"
 rg -q '(^|[[:space:]])util-linux-dev([[:space:]\\]|$)' build.sh \
 	|| fail "host dependencies are missing Alpine's U-Boot util-linux-dev dependency"
+rg -q '(^|[[:space:]])sgdisk([[:space:]\\]|$)' build.sh \
+	|| fail "host dependencies are missing Alpine's standalone sgdisk package"
+if rg -q '(^|[[:space:]])gptfdisk([[:space:]\\]|$)' build.sh; then
+	fail "gptfdisk does not install its split sgdisk command subpackage"
+fi
+rg -Fq 'image_commands+=(sgdisk)' build.sh \
+	|| fail "the early image-tool preflight does not require sgdisk for GPT"
 
 for config in boards/*.config; do
 	board="${config##*/}"
