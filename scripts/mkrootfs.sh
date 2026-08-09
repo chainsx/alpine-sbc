@@ -221,38 +221,35 @@ configure_system() {
 	enable_service sshd default
 	enable_service networkmanager default
 
-	mkdir -p "$rootfs/etc/network" "$rootfs/etc/local.d" "$rootfs/root"
+	mkdir -p "$rootfs/etc/network" "$rootfs/root"
 	cat > "$rootfs/etc/network/interfaces" <<'EOF'
 auto lo
 iface lo inet loopback
 EOF
-
-	cat > "$rootfs/etc/local.d/load-modules.start" <<'EOF'
-#!/bin/sh
-echo "Scanning hardware drivers..."
-mdev -s
-find /sys -name modalias -type f -exec cat '{}' + 2>/dev/null \
-	| sort -u | xargs -r -n1 modprobe -b -q 2>/dev/null || true
-EOF
-	chmod 755 "$rootfs/etc/local.d/load-modules.start"
 
 	printf '%s\n' alpine-sbc > "$rootfs/etc/hostname"
 	ln -sfn /usr/share/zoneinfo/Asia/Singapore "$rootfs/etc/localtime"
 	printf '%s\n' Asia/Singapore > "$rootfs/etc/timezone"
 
 	# Remove serial getty entries created by older alpine-sbc builds so
-	# --keep-rootfs can safely switch boards or corrected console names.
+	# --keep-rootfs can safely switch boards or corrected console names.  A
+	# board may explicitly disable serial_getty when it has no usable UART;
+	# leaving an inittab respawn entry in that case only creates a dead getty.
 	sed -i -E \
 		'/^(ttyAMA[0-9]+|ttyFIQ[0-9]+|ttyAML[0-9]+|ttySTM[0-9]+|ttyS[0-9]+)::respawn:\/sbin\/getty -L [0-9]+ [A-Za-z0-9._-]+ vt100( # alpine-sbc)?$/d' \
 		"$rootfs/etc/inittab"
-	printf '%s::respawn:/sbin/getty -L %s %s vt100 # alpine-sbc\n' \
-		"$serial_console" "$serial_baud" "$serial_console" \
-		>> "$rootfs/etc/inittab"
-	if [[ -f "$rootfs/etc/securetty" ]] \
-		&& ! grep -Fxq "$serial_console" "$rootfs/etc/securetty"; then
-		printf '%s\n' "$serial_console" >> "$rootfs/etc/securetty"
+	if [[ "${serial_getty:-yes}" == yes ]]; then
+		printf '%s::respawn:/sbin/getty -L %s %s vt100 # alpine-sbc\n' \
+			"$serial_console" "$serial_baud" "$serial_console" \
+			>> "$rootfs/etc/inittab"
+		if [[ -f "$rootfs/etc/securetty" ]] \
+			&& ! grep -Fxq "$serial_console" "$rootfs/etc/securetty"; then
+			printf '%s\n' "$serial_console" >> "$rootfs/etc/securetty"
+		fi
+		log_info "Enabled serial console getty on $serial_console at $serial_baud baud"
+	else
+		log_info "Serial console getty disabled for this board"
 	fi
-	log_info "Enabled serial console getty on $serial_console at $serial_baud baud"
 
 	sed -i -E \
 		-e 's/^[#[:space:]]*PermitRootLogin.*/PermitRootLogin prohibit-password/' \

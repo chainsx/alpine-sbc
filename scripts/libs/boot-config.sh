@@ -6,10 +6,15 @@
 
 generate_extlinux_config() {
 	local directory="$1"
+	local timeout="${boot_timeout:-1}"
 	mkdir -p "$directory/extlinux"
 	{
 		printf 'default Alpine\n'
-		printf 'timeout 30\n\n'
+		printf 'prompt 0\n'
+		# U-Boot interprets this value in tenths of a second.  A short
+		# interruptible window avoids the old 3-second boot penalty while
+		# retaining a chance to select a rescue entry if one is added later.
+		printf 'timeout %s\n\n' "$timeout"
 		printf 'label Alpine\n'
 		printf '  kernel /vmlinuz-%s\n' "$KERNEL_FLAVOR"
 		if [[ "$initrd" == yes ]]; then

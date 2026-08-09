@@ -96,6 +96,11 @@ find "$repository_root/abuild-output" -type f \
 	-name 'linux-headers-*.apk' -delete
 
 log_info "Building signed Alpine kernel packages"
+# build.sh intentionally uses `apk add --no-cache`, which removes the index
+# cache after installing host tools.  abuild -r resolves the APKBUILD's
+# makedepends through apk and therefore needs a current local index here.
+log_info "Refreshing Alpine package indexes for abuild dependency resolution"
+apk update
 (
 	cd "$package_root"
 	export PACKAGER_PRIVKEY="$private_key"

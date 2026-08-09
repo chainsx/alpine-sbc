@@ -6,8 +6,9 @@ packages, a root filesystem, and the final disk image.
 
 ## Requirements
 
-- Alpine Linux on an ARM64/aarch64 host
-- Root privileges for packages, chroot, loop devices, and mounts
+- Alpine Linux on an ARM64/aarch64 host, or Docker on an ARM64 host
+- Root privileges for packages, chroot, loop devices, and mounts; the Docker
+  workflow runs the Alpine builder as a privileged container
 - At least 30 GiB of free disk space
 - Network access to Alpine mirrors and the Git repositories selected by a board
 
@@ -16,6 +17,18 @@ packages, a root filesystem, and the final disk image.
 ```sh
 sudo ./build.sh --board extlinux-arm64 --version 3.23.0
 ```
+
+On a non-Alpine ARM64 host, use the matching Alpine container instead:
+
+```sh
+./extra/scripts/run-build-container.sh --board extlinux-arm64 --version 3.23.0
+./extra/scripts/run-build-container.sh --board efi-arm64 --version 3.23.0
+```
+
+The wrapper pulls `alpine:<version>` for `linux/arm64`, mounts this checkout,
+and starts the build with Docker `--privileged`. `--alpine-version` can be
+used when the container tag and build `--version` need to be specified
+separately.
 
 Build the ARM64 EFI/GRUB image for QEMU:
 
@@ -85,6 +98,23 @@ The development package has an exact-version dependency on the generated
 matching `linux-headers` package by default. All local APKs and
 `APKINDEX.tar.gz` are signed; the rootfs does not use `--allow-untrusted`.
 
+## QEMU boot testing
+
+After building either QEMU image, test the serial startup path and record
+kernel/login timestamps:
+
+```sh
+extra/scripts/test-boot.sh --board extlinux-arm64
+extra/scripts/test-boot.sh --board efi-arm64
+```
+
+The test stops when the serial login prompt appears and writes a timestamped
+log and `.env` summary. Set `BOOT_TEST_DIR` and `QEMU_DIR` to use a writable
+directory when the privileged build left `build/` root-owned. The board
+configs use a one-tenth-second boot-menu timeout and avoid scanning all of
+`/sys` for modules during every boot; serial getty is explicitly enabled for
+both QEMU boards.
+
 ## QEMU EFI testing
 
 After building `efi-arm64`, boot it with the project U-Boot:
@@ -130,11 +160,15 @@ initrd="yes"
 
 serial_console="ttyS2"
 serial_baud="1500000"
+serial_getty="yes"
 part_table="gpt"
 boot_size="256"
 ```
 
 Board and generic patches are loaded from `patches/{u-boot,kernel,atf}/`.
+Set `serial_getty="no"` and omit the serial console fields for a board with
+no usable UART; validation then rejects serial boot arguments and no serial
+entry is written to `inittab`.
 
 ## Supported configurations
 

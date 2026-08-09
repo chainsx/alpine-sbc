@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: alpine-sbc <alpine-sbc@example.invalid>
+Date: Sun, 9 Aug 2026 18:40:00 +0000
+Subject: [PATCH] qemu-arm: do not delay the standard bootflow
+
+The image has a single validated boot entry.  Keep the U-Boot autoboot path
+interruptible, but do not add its default two-second prompt delay to every
+QEMU boot test or deployment.
+---
+ board/emulation/qemu-arm/qemu-arm.env | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/board/emulation/qemu-arm/qemu-arm.env b/board/emulation/qemu-arm/qemu-arm.env
+index 2e2a8a1b15..0000000000 100644
+--- a/board/emulation/qemu-arm/qemu-arm.env
++++ b/board/emulation/qemu-arm/qemu-arm.env
+@@ -13,2 +13,3 @@ kernel_addr_r=0x40400000
+ ramdisk_addr_r=0x44000000
+ boot_targets=qfw usb scsi virtio nvme dhcp
++bootdelay=0
+-- 
+2.47.2

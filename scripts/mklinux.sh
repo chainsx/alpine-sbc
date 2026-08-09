@@ -73,14 +73,19 @@ kernel_url="${override_url:-${kernel_url:-}}"
 kernel_branch="${override_branch:-${kernel_branch:-}}"
 kernel_config="${override_config:-${kernel_config:-}}"
 require_board_variables kernel_arch kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel \
-	boot_mode initrd dtb_name serial_console serial_baud
+	boot_mode initrd dtb_name
+
+serial_getty="${serial_getty:-yes}"
+if [[ "$serial_getty" == yes ]]; then
+	require_board_variables serial_console serial_baud
+fi
 
 kernel_arch="$(normalize_arch "$kernel_arch")"
 [[ "$kernel_arch" == arm64 ]] || die "Only arm64 kernels are supported; requested '$kernel_arch'."
 host_arch="$(normalize_arch "$(uname -m)")"
 [[ "$host_arch" == arm64 ]] || die "Native arm64 kernel builds require an arm64 host; detected '$host_arch'."
 
-require_commands git make gcc mawk openssl cpio find sha256sum sort
+require_commands cmp git make gcc mawk openssl cpio find sha256sum sort
 
 kernel_src="$WORK_DIR/linux-src"
 kernel_build="$WORK_DIR/linux-build/$kernel_flavor"
@@ -147,17 +152,32 @@ apply_kernel_changes() {
 configure_kernel() {
 	local option
 	mkdir -p "$kernel_build"
-	printf -- '-%s-%s\n' "$kernel_pkgrel" "$kernel_flavor" > "$kernel_build/localversion-alpine"
-	cp "$config_path" "$kernel_build/.config"
+	local expected_localversion="-$kernel_pkgrel-$kernel_flavor"
+	local config_state="$kernel_build/.alpine-sbc-config"
+	local config_fingerprint
+	config_fingerprint="$(sha256sum "$config_path" | awk '{print $1}')|signing=${KERNEL_SIGNING_KEY:-}"
+	local refresh_config=0
+	if [[ ! -f "$kernel_build/localversion-alpine" ]] \
+		|| [[ "$(cat "$kernel_build/localversion-alpine")" != "$expected_localversion" ]]; then
+		printf '%s\n' "$expected_localversion" > "$kernel_build/localversion-alpine"
+	fi
+	# Do not rewrite an unchanged configuration: kbuild treats its mtime as a
+	# dependency and would otherwise rebuild every object on each retry.  The
+	# state file records the source config rather than comparing against .config,
+	# because olddefconfig legitimately adds new kernel defaults.
+	if [[ ! -f "$config_state" ]] || [[ "$(cat "$config_state")" != "$config_fingerprint" ]]; then
+		cp "$config_path" "$kernel_build/.config"
+		refresh_config=1
+	fi
 
 	# Git checkouts otherwise append a commit suffix when a vendor config enables
 	# CONFIG_LOCALVERSION_AUTO.  Alpine's source-tarball build has no such suffix.
-	if [[ -x "$kernel_src/scripts/config" ]]; then
+	if (( refresh_config )) && [[ -x "$kernel_src/scripts/config" ]]; then
 		"$kernel_src/scripts/config" --file "$kernel_build/.config" \
 			--set-str LOCALVERSION '' --disable LOCALVERSION_AUTO
 	fi
 
-	if [[ -n "${KERNEL_SIGNING_KEY:-}" && -f "${KERNEL_SIGNING_KEY:-}" ]]; then
+	if (( refresh_config )) && [[ -n "${KERNEL_SIGNING_KEY:-}" && -f "${KERNEL_SIGNING_KEY:-}" ]]; then
 		"$kernel_src/scripts/config" --file "$kernel_build/.config" \
 			--enable MODULE_SIG --set-str MODULE_SIG_KEY "$KERNEL_SIGNING_KEY"
 	fi
@@ -165,6 +185,7 @@ configure_kernel() {
 	log_info "Configuring $kernel_flavor with $kernel_config"
 	make -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" \
 		AWK="${AWK:-mawk}" olddefconfig
+	printf '%s\n' "$config_fingerprint" > "$config_state"
 
 	for option in CONFIG_DEVTMPFS CONFIG_DEVTMPFS_MOUNT CONFIG_EXT4_FS; do
 		grep -q "^${option}=y" "$kernel_build/.config" \
@@ -177,22 +198,24 @@ configure_kernel() {
 		done
 	fi
 
-	case "$serial_console" in
-		ttyFIQ*)
-			for option in CONFIG_FIQ_DEBUGGER_CONSOLE CONFIG_ROCKCHIP_FIQ_DEBUGGER; do
-				grep -q "^${option}=y" "$kernel_build/.config" \
-					|| die "$serial_console requires ${option}=y."
-			done
-			;;
-		ttyAML*) option=CONFIG_SERIAL_MESON_CONSOLE ;;
-		ttySTM*) option=CONFIG_SERIAL_STM32_CONSOLE ;;
-		ttyAMA*) option=CONFIG_SERIAL_AMBA_PL011_CONSOLE ;;
-		ttyS*) option=CONFIG_SERIAL_8250_CONSOLE ;;
-		*) die "Unsupported serial console device: $serial_console" ;;
-	esac
-	if [[ "$serial_console" != ttyFIQ* ]]; then
-		grep -q "^${option}=y" "$kernel_build/.config" \
-			|| die "$serial_console requires ${option}=y."
+	if [[ "$serial_getty" == yes ]]; then
+		case "$serial_console" in
+			ttyFIQ*)
+				for option in CONFIG_FIQ_DEBUGGER_CONSOLE CONFIG_ROCKCHIP_FIQ_DEBUGGER; do
+					grep -q "^${option}=y" "$kernel_build/.config" \
+						|| die "$serial_console requires ${option}=y."
+					done
+				;;
+			ttyAML*) option=CONFIG_SERIAL_MESON_CONSOLE ;;
+			ttySTM*) option=CONFIG_SERIAL_STM32_CONSOLE ;;
+			ttyAMA*) option=CONFIG_SERIAL_AMBA_PL011_CONSOLE ;;
+			ttyS*) option=CONFIG_SERIAL_8250_CONSOLE ;;
+			*) die "Unsupported serial console device: $serial_console" ;;
+		esac
+		if [[ "$serial_console" != ttyFIQ* ]]; then
+			grep -q "^${option}=y" "$kernel_build/.config" \
+				|| die "$serial_console requires ${option}=y."
+		fi
 	fi
 
 	if [[ "$boot_mode" == grub ]]; then
@@ -219,9 +242,16 @@ build_kernel() {
 	unset CFLAGS CPPFLAGS CXXFLAGS LDFLAGS
 
 	log_info "Building Linux kernel with $jobs jobs"
+	build_targets=(all)
+	if [[ "$dtb_name" == none ]]; then
+		# QEMU/EFI supplies its own device tree.  Building every arm64 DTB is
+		# unnecessary for these images and dominates the first build time.
+		build_targets=(Image modules)
+	fi
 	make -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" \
 		AWK="${AWK:-mawk}" CC="${CC:-gcc}" \
-		KBUILD_BUILD_VERSION="$((kernel_pkgrel + 1))-Alpine" -j"$jobs"
+		KBUILD_BUILD_VERSION="$((kernel_pkgrel + 1))-Alpine" -j"$jobs" \
+		"${build_targets[@]}"
 
 	if grep -q '^CONFIG_DEBUG_INFO_BTF=y' "$kernel_build/.config"; then
 		require_commands bpftool
@@ -244,6 +274,12 @@ stage_kernel_package() {
 		"$package_stage/lib/modules/$abi_release/source"
 	rm -rf "$package_stage/lib/firmware"
 
+	# Keep Alpine's vmlinuz-* package naming, but stage the native ARM64 Image.
+	# U-Boot's extlinux bootflow does not have a reliable way to pass the exact
+	# compressed-file length to booti after it has loaded the initramfs; using
+	# Image avoids that extra decompression failure point and starts directly at
+	# the Linux entry point.  The package still contains the same kernel ABI,
+	# modules, initramfs contract, config, and external-module metadata.
 	install -Dm644 "$kernel_build/arch/arm64/boot/Image" \
 		"$package_stage/boot/vmlinuz-$kernel_flavor"
 	install -Dm644 "$kernel_build/System.map" \
@@ -251,11 +287,11 @@ stage_kernel_package() {
 	install -Dm644 "$kernel_build/.config" \
 		"$package_stage/boot/config-$abi_release"
 
-	log_info "Installing device trees into flavor-specific boot directory"
-	make -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" \
-		AWK="${AWK:-mawk}" \
-		INSTALL_DTBS_PATH="$package_stage/boot/dtbs-$kernel_flavor" dtbs_install
 	if [[ "$dtb_name" != none ]]; then
+		log_info "Installing device trees into flavor-specific boot directory"
+		make -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" \
+			AWK="${AWK:-mawk}" \
+			INSTALL_DTBS_PATH="$package_stage/boot/dtbs-$kernel_flavor" dtbs_install
 		[[ -s "$package_stage/boot/dtbs-$kernel_flavor/$dtb_name.dtb" ]] \
 			|| die "Configured board DTB was not built: $dtb_name.dtb"
 	fi
@@ -317,6 +353,9 @@ stage_linux_headers_package() {
 	# UAPI from this exact kernel source instead of packaging the source tree or
 	# reusing headers from an unrelated repository kernel.
 	log_info "Exporting sanitized userspace UAPI headers (linux-headers)"
+	# `make headers` does not remove files left by a previous kernel/config.  A
+	# clean export prevents stale UAPI headers from leaking into a retry.
+	rm -rf "$kernel_build/usr/include"
 	make -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" \
 		AWK="${AWK:-mawk}" headers
 	[[ -d "$kernel_build/usr/include/linux" ]] \
@@ -381,8 +420,10 @@ apply_kernel_changes
 configure_kernel
 build_kernel
 
+log_info "Resolving kernel package version and ABI release"
 kernel_pkgver="$(make -s -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" kernelversion)"
 abi_release="$(make -s -C "$kernel_src" O="$kernel_build" ARCH="$kernel_arch" kernelrelease)"
+log_info "Resolved kernel version '$kernel_pkgver' and ABI '$abi_release'"
 [[ "$kernel_pkgver" =~ ^[0-9]+\.[0-9]+([.][0-9]+)?([._][A-Za-z0-9]+)*$ ]] \
 	|| die "Kernel version '$kernel_pkgver' is not a valid Alpine pkgver."
 [[ "$abi_release" == *"-$kernel_pkgrel-$kernel_flavor" ]] \

@@ -14,6 +14,8 @@ mapfile -t scripts < <(find . -type f -name '*.sh' -not -path './build/*' | sort
 for script in "${scripts[@]}"; do
 	bash -n "$script"
 done
+[[ -x extra/scripts/run-build-container.sh ]] || fail "Docker build entrypoint is not executable"
+[[ -x extra/scripts/test-boot.sh ]] || fail "QEMU boot test entrypoint is not executable"
 
 # shellcheck source=scripts/libs/common.sh
 source "$project_root/scripts/libs/common.sh"
@@ -51,13 +53,13 @@ for config in boards/*.config; do
 		amlogic_boot_fip stm32mp2_boot_fip optee_compile optee_url optee_branch \
 		optee_extra_config soc kernel_url kernel_branch kernel_config dtb_name \
 		rootfs_arch part_table boot_size kernel_flavor kernel_pkgrel initrd \
-		kernel_firmware_packages serial_console serial_baud
+		kernel_firmware_packages serial_console serial_baud serial_getty boot_timeout
 	load_board_config "$board" >/dev/null
 	# shellcheck disable=SC2154
 	for required in arch platform bootloader boot_mode bootargs bootloader_url bootloader_branch \
 		bootloader_config kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel \
 		dtb_name rootfs_arch \
-		part_table boot_size initrd serial_console serial_baud; do
+		part_table boot_size initrd; do
 		[[ -n "${!required:-}" ]] || fail "$config does not define $required"
 	done
 	# shellcheck disable=SC2154
@@ -65,28 +67,43 @@ for config in boards/*.config; do
 	# shellcheck disable=SC2154
 	[[ "$arch" == arm64 && "$rootfs_arch" == aarch64 ]] \
 		|| fail "$config is not arm64/aarch64"
-	# Values are supplied by the sourced board configuration.
-	# shellcheck disable=SC2154
-	[[ "$serial_baud" =~ ^[1-9][0-9]*$ ]] || fail "$config has an invalid serial_baud"
-	# shellcheck disable=SC2154
-	[[ "$bootargs" == *"console=$serial_console,"* ]] \
-		|| fail "$config bootargs does not select $serial_console"
+	serial_getty="${serial_getty:-yes}"
+	case "$serial_getty" in
+		yes)
+		[[ -n "${serial_console:-}" && -n "${serial_baud:-}" ]] \
+			|| fail "$config enables serial_getty without serial settings"
+		# Values are supplied by the sourced board configuration.
+		# shellcheck disable=SC2154
+		[[ "$serial_baud" =~ ^[1-9][0-9]*$ ]] || fail "$config has an invalid serial_baud"
+		# shellcheck disable=SC2154
+		[[ "$bootargs" == *"console=$serial_console,"* ]] \
+			|| fail "$config bootargs does not select $serial_console"
+		;;
+		no)
+		[[ -z "${serial_console:-}" || "$serial_console" == none ]] \
+			|| fail "$config disables serial_getty but defines serial_console"
+		;;
+		*) fail "$config has an invalid serial_getty" ;;
+	esac
 	[[ "$initrd" == yes ]] || fail "$config does not explicitly enable initrd"
 	for option in BLK_DEV_INITRD RD_GZIP MODULES DEVTMPFS DEVTMPFS_MOUNT EXT4_FS; do
 		rg -q "^CONFIG_${option}=y$" "configs/kernel/$kernel_config" \
 			|| fail "$config kernel config is missing built-in CONFIG_${option}"
 	done
-	case "$serial_console" in
-		ttyFIQ*) console_options=(FIQ_DEBUGGER_CONSOLE ROCKCHIP_FIQ_DEBUGGER) ;;
-		ttyAML*) console_options=(SERIAL_MESON_CONSOLE) ;;
-		ttySTM*) console_options=(SERIAL_STM32_CONSOLE) ;;
-		ttyAMA*) console_options=(SERIAL_AMBA_PL011_CONSOLE) ;;
-		ttyS*) console_options=(SERIAL_8250_CONSOLE) ;;
-	esac
-	for option in "${console_options[@]}"; do
-		rg -q "^CONFIG_${option}=y$" "configs/kernel/$kernel_config" \
-			|| fail "$config kernel config cannot drive $serial_console (CONFIG_${option})"
-	done
+	if [[ "$serial_getty" == yes ]]; then
+		case "$serial_console" in
+			ttyFIQ*) console_options=(FIQ_DEBUGGER_CONSOLE ROCKCHIP_FIQ_DEBUGGER) ;;
+			ttyAML*) console_options=(SERIAL_MESON_CONSOLE) ;;
+			ttySTM*) console_options=(SERIAL_STM32_CONSOLE) ;;
+			ttyAMA*) console_options=(SERIAL_AMBA_PL011_CONSOLE) ;;
+			ttyS*) console_options=(SERIAL_8250_CONSOLE) ;;
+			*) fail "$config has an unsupported serial_console" ;;
+			esac
+		for option in "${console_options[@]}"; do
+			rg -q "^CONFIG_${option}=y$" "configs/kernel/$kernel_config" \
+				|| fail "$config kernel config cannot drive $serial_console (CONFIG_${option})"
+		done
+	fi
 	# Values are supplied by the sourced board configuration.
 	# shellcheck disable=SC2154
 	case "$boot_mode" in extlinux | grub) ;; *) fail "$config has unsupported boot_mode" ;; esac
@@ -103,6 +120,15 @@ rg -q '^CONFIG_INITRAMFS_SOURCE=""$' configs/kernel/linux-generic-arm64-lts.conf
 rg -Fq 'validate_gzip_initramfs "$rootfs_dir/boot/initramfs-$KERNEL_FLAVOR"' \
 	scripts/mkimage.sh \
 	|| fail "image creation does not inspect the initramfs before packaging"
+rg -Fq "printf 'prompt 0\\n'" scripts/libs/boot-config.sh \
+	|| fail "extlinux configuration does not disable the interactive prompt"
+rg -Fq "printf 'timeout %s\\n\\n' \"\$timeout\"" scripts/libs/boot-config.sh \
+	|| fail "extlinux configuration does not use the short boot timeout"
+if rg -q 'Scanning hardware drivers|find /sys -name modalias' scripts/mkrootfs.sh; then
+	fail "rootfs still performs the slow full /sys module scan at every boot"
+fi
+rg -Fq 'serial_getty:-yes' scripts/mkrootfs.sh \
+	|| fail "rootfs serial getty policy is not board-aware"
 
 rg -q '^dtb_name="rockchip/rk3576-100ask-dshanpi-a1"$' \
 	boards/100ask-dshanpi-a1.config || fail "DshanPi A1 does not select its RK3576 DTB"

@@ -148,7 +148,7 @@ validate_board_config() {
 		arch platform bootloader boot_mode bootargs \
 		bootloader_url bootloader_branch bootloader_config atf_compile \
 		kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel \
-		dtb_name initrd rootfs_arch part_table boot_size serial_console serial_baud
+		dtb_name initrd rootfs_arch part_table boot_size
 
 	[[ "$(normalize_arch "$arch")" == arm64 ]] \
 		|| die "Board '$board' must use arch=arm64."
@@ -179,12 +179,28 @@ validate_board_config() {
 		|| die "Board '$board' has invalid boot_size '$boot_size'."
 	(( boot_size >= 64 )) \
 		|| die "Board '$board' boot_size must be at least 64 MiB."
-	[[ "$serial_console" =~ ^[A-Za-z0-9._-]+$ ]] \
-		|| die "Board '$board' has invalid serial_console '$serial_console'."
-	[[ "$serial_baud" =~ ^[1-9][0-9]*$ ]] \
-		|| die "Board '$board' has invalid serial_baud '$serial_baud'."
-	[[ " $bootargs " == *" console=$serial_console,$serial_baud "* ]] \
-		|| die "Board '$board' bootargs do not contain console=$serial_console,$serial_baud."
+	serial_getty="${serial_getty:-yes}"
+	case "$serial_getty" in
+		yes)
+			require_board_variables serial_console serial_baud
+			[[ "$serial_console" =~ ^[A-Za-z0-9._-]+$ ]] \
+				|| die "Board '$board' has invalid serial_console '$serial_console'."
+			[[ "$serial_baud" =~ ^[1-9][0-9]*$ ]] \
+				|| die "Board '$board' has invalid serial_baud '$serial_baud'."
+			[[ " $bootargs " == *" console=$serial_console,$serial_baud "* ]] \
+				|| die "Board '$board' bootargs do not contain console=$serial_console,$serial_baud."
+			;;
+		no)
+			[[ -z "${serial_console:-}" || "$serial_console" == none ]] \
+				|| die "Board '$board' disables serial_getty but defines serial_console=$serial_console."
+			[[ -z "${serial_baud:-}" || "$serial_baud" == 0 ]] \
+				|| die "Board '$board' disables serial_getty but defines serial_baud=$serial_baud."
+			if [[ "$bootargs" =~ console=(ttyAMA|ttyFIQ|ttyAML|ttySTM|ttyS)[0-9] ]]; then
+				die "Board '$board' disables serial_getty but bootargs select a serial console."
+			fi
+			;;
+		*) die "Board '$board' has invalid serial_getty='$serial_getty'. Use yes or no." ;;
+	esac
 	[[ " $bootargs " == *' root=LABEL=rootfs '* ]] \
 		|| die "Board '$board' bootargs must select root=LABEL=rootfs."
 
