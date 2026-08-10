@@ -17,13 +17,13 @@ EOF
 
 board=""
 kernel_flavor=""
+kernel_group=""
 kernel_url=""
 KERNEL_FLAVOR=""
 KERNEL_ABI_RELEASE=""
 KERNEL_PKGVER=""
 KERNEL_PKGREL=""
 KERNEL_APK_ARCH=""
-KERNEL_BOARD=""
 while (($#)); do
 	case "$1" in
 		--board)
@@ -57,7 +57,8 @@ public_key="$private_key.pub"
 # shellcheck disable=SC1090
 source "$metadata_file"
 
-[[ "$KERNEL_BOARD" == "$board" ]] || die "Staged kernel belongs to '$KERNEL_BOARD', not '$board'."
+[[ "$KERNEL_GROUP" == "$kernel_group" ]] \
+	|| die "Staged kernel group '$KERNEL_GROUP' does not match '$kernel_group'."
 [[ "$KERNEL_FLAVOR" == "$kernel_flavor" ]] || die "Kernel flavor metadata does not match the board configuration."
 [[ "$KERNEL_APK_ARCH" == aarch64 ]] || die "Only aarch64 APK output is supported."
 for directory in kernel-bin kernel-dev-bin kernel-doc-bin kernel-headers-bin; do
@@ -81,14 +82,16 @@ sed \
 	-e "s|@ABI_RELEASE@|$(escape_sed "$KERNEL_ABI_RELEASE")|g" \
 	-e "s|@PKGVER@|$(escape_sed "$KERNEL_PKGVER")|g" \
 	-e "s|@PKGREL@|$(escape_sed "$KERNEL_PKGREL")|g" \
-	-e "s|@BOARD@|$(escape_sed "$KERNEL_BOARD")|g" \
+	-e "s|@BOARD@|$(escape_sed "$KERNEL_GROUP")|g" \
 	-e "s|@KERNEL_URL@|$(escape_sed "$kernel_url")|g" \
 	-e "s|@APK_ARCH@|$(escape_sed "$KERNEL_APK_ARCH")|g" \
 	"$template" > "$package_root/APKBUILD"
 
-rm -f "$repository_dir"/linux-"$KERNEL_FLAVOR"-*.apk \
-	"$repository_dir"/linux-headers-*.apk \
-	"$repository_dir"/APKINDEX.tar.gz
+# The repository is a staging area for one build transaction.  Remove all
+# generated alpine-sbc kernel APKs so a previous per-board flavor cannot leak
+# into the index after switching to shared kernel groups.
+find "$repository_dir" -maxdepth 1 -type f -name 'linux-sbc-*.apk' -delete
+rm -f "$repository_dir"/linux-headers-*.apk "$repository_dir"/APKINDEX.tar.gz
 mkdir -p "$repository_root/abuild-output"
 find "$repository_root/abuild-output" -type f \
 	-name "linux-$KERNEL_FLAVOR-*.apk" -delete
@@ -132,6 +135,7 @@ headers_apk="$repository_dir/linux-headers-$KERNEL_PKGVER-r$KERNEL_PKGREL.apk"
 	|| die "One or more expected kernel packages are missing from $repository_dir."
 
 cat > "$repository_root/kernel-packages.env" <<EOF
+KERNEL_GROUP='$KERNEL_GROUP'
 KERNEL_PACKAGE='linux-$KERNEL_FLAVOR'
 KERNEL_DEV_PACKAGE='linux-$KERNEL_FLAVOR-dev'
 KERNEL_DOC_PACKAGE='linux-$KERNEL_FLAVOR-doc'

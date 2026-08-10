@@ -110,10 +110,11 @@ extra/scripts/test-boot.sh --board efi-arm64
 
 The test stops when the serial login prompt appears and writes a timestamped
 log and `.env` summary. Set `BOOT_TEST_DIR` and `QEMU_DIR` to use a writable
-directory when the privileged build left `build/` root-owned. The board
-configs use a one-tenth-second boot-menu timeout and avoid scanning all of
-`/sys` for modules during every boot; serial getty is explicitly enabled for
-both QEMU boards.
+directory when the privileged build left `build/` root-owned. All extlinux
+board configs use an explicit one-tenth-second boot-menu timeout and avoid
+scanning all of `/sys` for modules during every boot. Every current board
+config explicitly declares its serial getty policy; boards without a usable
+UART must set `serial_getty="no"`.
 
 ## QEMU EFI testing
 
@@ -150,25 +151,35 @@ bootloader_config="..._defconfig"
 atf_compile="no"
 rkbin="yes"
 
-kernel_url="..."
-kernel_branch="..."
-kernel_config="linux-....config"
-kernel_flavor="sbc-<name>"
-kernel_pkgrel="0"
+kernel_group="rockchip64-bsp"
 dtb_name="vendor/board"
 initrd="yes"
 
 serial_console="ttyS2"
 serial_baud="1500000"
 serial_getty="yes"
+mdev_coldplug="yes"
+boot_timeout="1"
 part_table="gpt"
 boot_size="256"
 ```
 
 Board and generic patches are loaded from `patches/{u-boot,kernel,atf}/`.
+`kernel_group` is the package-sharing boundary: boards in one group must use
+the same kernel source, branch, configuration, package release, and kernel
+patches.  The source URL, branch, configuration, and package release are
+defined once in `configs/kernel/groups/<kernel_group>.config`.  The kernel
+flavor is derived as `sbc-<kernel_group>`, so it should not be duplicated in a
+board file.  Use an existing group when only the DTB or bootloader differs;
+create a new group/configuration when built-in kernel support differs.
 Set `serial_getty="no"` and omit the serial console fields for a board with
 no usable UART; validation then rejects serial boot arguments and no serial
-entry is written to `inittab`.
+entry is written to `inittab`. Extlinux boards must also explicitly set
+`boot_timeout` in tenths of a second; the normal value is `1`.
+Physical boards should keep `mdev_coldplug="yes"` so modular storage and USB
+drivers are discovered. Virtual devtmpfs-only boards may set it to `no` when
+their required drivers are built in; the rootfs builder then skips the full
+mdev and module scans.
 
 ## Supported configurations
 

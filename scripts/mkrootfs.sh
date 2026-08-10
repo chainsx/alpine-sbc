@@ -37,6 +37,10 @@ KERNEL_REPOSITORY=""
 KERNEL_PUBLIC_KEY=""
 platform=""
 rootfs_arch=""
+serial_console=""
+serial_baud=""
+serial_getty=""
+mdev_coldplug=""
 rootfs_kernel_repository="/tmp/alpine-sbc-repository"
 
 while (($#)); do
@@ -169,6 +173,7 @@ base_packages=(
 	networkmanager-cli networkmanager-dnsmasq networkmanager-openrc networkmanager-tui
 	networkmanager-wifi openrc openrc-bash-completion openrc-init openssh
 	openssh-server-common-openrc sudo tzdata util-linux vim
+	e2fsprogs-extra
 )
 
 install_packages() {
@@ -215,8 +220,16 @@ configure_system() {
 	enable_service devfs sysinit
 	enable_service procfs sysinit
 	enable_service sysfs sysinit
-	enable_service mdev sysinit
-	enable_service modules boot
+	if [[ "$mdev_coldplug" == yes ]]; then
+		enable_service mdev sysinit
+		enable_service modules boot
+	else
+		log_info "Skipping mdev coldplug and module scan for this devtmpfs-only board"
+		# Alpine's procfs service wants modules even when it is not in a
+		# runlevel. Remove that provider on devtmpfs-only images so OpenRC
+		# cannot start it indirectly during sysinit.
+		rm -f "$rootfs/etc/init.d/modules" "$rootfs/etc/conf.d/modules"
+	fi
 	enable_service local default
 	enable_service sshd default
 	enable_service networkmanager default
@@ -238,7 +251,7 @@ EOF
 	sed -i -E \
 		'/^(ttyAMA[0-9]+|ttyFIQ[0-9]+|ttyAML[0-9]+|ttySTM[0-9]+|ttyS[0-9]+)::respawn:\/sbin\/getty -L [0-9]+ [A-Za-z0-9._-]+ vt100( # alpine-sbc)?$/d' \
 		"$rootfs/etc/inittab"
-	if [[ "${serial_getty:-yes}" == yes ]]; then
+	if [[ "$serial_getty" == yes ]]; then
 		printf '%s::respawn:/sbin/getty -L %s %s vt100 # alpine-sbc\n' \
 			"$serial_console" "$serial_baud" "$serial_console" \
 			>> "$rootfs/etc/inittab"
@@ -268,12 +281,15 @@ LABEL=rootfs  /      ext4  defaults,noatime  0 1
 LABEL=bootfs  /boot  vfat  defaults          0 2
 EOF
 
-	cat > "$rootfs/etc/alpine-sbc-release" <<EOF
+cat > "$rootfs/etc/alpine-sbc-release" <<EOF
 BOARD=$board
+KERNEL_GROUP=$KERNEL_GROUP
 KERNEL_FLAVOR=$KERNEL_FLAVOR
 KERNEL_RELEASE=$KERNEL_ABI_RELEASE
 SERIAL_CONSOLE=$serial_console
 SERIAL_BAUD=$serial_baud
+SERIAL_GETTY=$serial_getty
+MDEV_COLDPLUG=$mdev_coldplug
 EOF
 
 	rm -rf "$rootfs$rootfs_kernel_repository" "$rootfs/var/cache/apk"/*

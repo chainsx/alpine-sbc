@@ -24,6 +24,9 @@ source "$project_root/scripts/libs/common.sh"
 [[ "$(derive_kernel_flavor 'Firefly_RK3568.ROC-PC')" == sbc-firefly-rk3568-roc-pc ]] \
 	|| fail "kernel flavor normalization"
 
+declare -A kernel_group_signatures=()
+declare -A kernel_group_boards=()
+
 rg -q '(^|[[:space:]])gnutls-dev([[:space:]\\]|$)' build.sh \
 	|| fail "host dependencies are missing gnutls-dev for U-Boot mkeficapsule"
 rg -q '(^|[[:space:]])gawk([[:space:]\\]|$)' build.sh \
@@ -52,22 +55,23 @@ for config in boards/*.config; do
 		atf_extra_config rkbin rkbin_tpl_bin rkbin_tpl_revision \
 		amlogic_boot_fip stm32mp2_boot_fip optee_compile optee_url optee_branch \
 		optee_extra_config soc kernel_url kernel_branch kernel_config dtb_name \
-		rootfs_arch part_table boot_size kernel_flavor kernel_pkgrel initrd \
-		kernel_firmware_packages serial_console serial_baud serial_getty boot_timeout
+		rootfs_arch part_table kernel_group kernel_flavor kernel_pkgrel initrd \
+		kernel_firmware_packages serial_console serial_baud serial_getty boot_timeout mdev_coldplug
 	load_board_config "$board" >/dev/null
 	# shellcheck disable=SC2154
 	for required in arch platform bootloader boot_mode bootargs bootloader_url bootloader_branch \
-		bootloader_config kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel \
+		bootloader_config kernel_url kernel_branch kernel_config kernel_group kernel_flavor kernel_pkgrel \
 		dtb_name rootfs_arch \
-		part_table boot_size initrd; do
+		part_table boot_size initrd serial_getty mdev_coldplug; do
 		[[ -n "${!required:-}" ]] || fail "$config does not define $required"
 	done
 	# shellcheck disable=SC2154
 	[[ -f "configs/kernel/$kernel_config" ]] || fail "$config references missing $kernel_config"
+	[[ "$kernel_flavor" == "$(derive_kernel_flavor "$kernel_group")" ]] \
+		|| fail "$config does not derive kernel_flavor from kernel_group"
 	# shellcheck disable=SC2154
 	[[ "$arch" == arm64 && "$rootfs_arch" == aarch64 ]] \
 		|| fail "$config is not arm64/aarch64"
-	serial_getty="${serial_getty:-yes}"
 	case "$serial_getty" in
 		yes)
 		[[ -n "${serial_console:-}" && -n "${serial_baud:-}" ]] \
@@ -107,15 +111,45 @@ for config in boards/*.config; do
 	# Values are supplied by the sourced board configuration.
 	# shellcheck disable=SC2154
 	case "$boot_mode" in extlinux | grub) ;; *) fail "$config has unsupported boot_mode" ;; esac
+	case "$mdev_coldplug" in yes | no) ;; *) fail "$config has invalid mdev_coldplug" ;; esac
+	if [[ "$platform" == qemu || "$platform" == efi-arm64 ]]; then
+		[[ "$mdev_coldplug" == no ]] || fail "$config should skip mdev coldplug on a virtual board"
+	else
+		[[ "$mdev_coldplug" == yes ]] || fail "$config must retain mdev coldplug on a physical board"
+	fi
+	if [[ "$boot_mode" == extlinux ]]; then
+		[[ -n "${boot_timeout:-}" ]] || fail "$config does not define boot_timeout"
+		[[ "$boot_timeout" =~ ^[1-9][0-9]*$ ]] || fail "$config has an invalid boot_timeout"
+	fi
 	# shellcheck disable=SC2154
 	if [[ "$boot_mode" == grub ]]; then
 		[[ "$platform" == efi-arm64 ]] || fail "$config does not use the EFI platform"
 		[[ "$part_table" == gpt ]] || fail "$config does not use GPT for EFI"
 		[[ "$initrd" == yes ]] || fail "$config does not enable an initramfs"
 	fi
+	# shellcheck disable=SC2154
+	signature="$kernel_url|$kernel_branch|$kernel_config|$kernel_pkgrel"
+	if [[ -n "${kernel_group_signatures[$kernel_group]:-}" \
+		&& "${kernel_group_signatures[$kernel_group]}" != "$signature" ]]; then
+		fail "$config changes the source/configuration of shared kernel_group=$kernel_group"
+	fi
+	kernel_group_signatures[$kernel_group]="$signature"
+	kernel_group_boards[$kernel_group]+=" $board"
 done
 
-rg -q '^CONFIG_INITRAMFS_SOURCE=""$' configs/kernel/linux-generic-arm64-lts.config \
+[[ "${#kernel_group_signatures[@]}" -eq 5 ]] \
+	|| fail "expected five explicit kernel groups for the supported boards"
+[[ " ${kernel_group_boards[generic-arm64]} " == *" efi-arm64 "* \
+	&& " ${kernel_group_boards[generic-arm64]} " == *" extlinux-arm64 "* ]] \
+	|| fail "generic-arm64 must be shared by EFI and extlinux QEMU boards"
+[[ " ${kernel_group_boards[rockchip64-bsp]} " == *" firefly-rk3588s-roc-pc "* ]] \
+	|| fail "rockchip64-bsp group is missing a supported board"
+
+if rg -n '(^|[[:space:]])loglevel=8([[:space:]]|")' boards/*.config; then
+	fail "board bootargs retain the maximum kernel log level; use the default level to avoid unnecessary boot-time serial output"
+fi
+
+rg -q '^CONFIG_INITRAMFS_SOURCE=""$' configs/kernel/linux-generic-arm64-qemu.config \
 	|| fail "generic arm64 kernel config retains a host-specific built-in initramfs path"
 rg -Fq 'validate_gzip_initramfs "$rootfs_dir/boot/initramfs-$KERNEL_FLAVOR"' \
 	scripts/mkimage.sh \
@@ -127,8 +161,16 @@ rg -Fq "printf 'timeout %s\\n\\n' \"\$timeout\"" scripts/libs/boot-config.sh \
 if rg -q 'Scanning hardware drivers|find /sys -name modalias' scripts/mkrootfs.sh; then
 	fail "rootfs still performs the slow full /sys module scan at every boot"
 fi
-rg -Fq 'serial_getty:-yes' scripts/mkrootfs.sh \
-	|| fail "rootfs serial getty policy is not board-aware"
+rg -q '^[[:space:]]*e2fsprogs-extra$' scripts/mkrootfs.sh \
+	|| fail "rootfs does not provide fsck.ext4 for the enabled filesystem check"
+rg -Fq 'if [[ "$serial_getty" == yes ]]' scripts/mkrootfs.sh \
+	|| fail "rootfs serial getty policy is not explicit"
+rg -Fq 'Skipping mdev coldplug and module scan' scripts/mkrootfs.sh \
+	|| fail "rootfs does not expose the virtual-board mdev coldplug optimization"
+rg -Fq 'rm -f "$rootfs/etc/init.d/modules" "$rootfs/etc/conf.d/modules"' scripts/mkrootfs.sh \
+	|| fail "virtual-board rootfs does not mask OpenRC's indirect modules dependency"
+rg -Fq -- "-name 'linux-sbc-*.apk' -delete" scripts/libs/kernel-pkg.sh \
+	|| fail "kernel package staging does not remove stale per-board APKs"
 
 rg -q '^dtb_name="rockchip/rk3576-100ask-dshanpi-a1"$' \
 	boards/100ask-dshanpi-a1.config || fail "DshanPi A1 does not select its RK3576 DTB"
@@ -154,7 +196,7 @@ rg -q '^\+\+\+ b/configs/sakurapi_rk3308b_defconfig$' \
 [[ -f boards/efi-arm64.config ]] || fail "efi-arm64 board configuration is missing"
 for option in EFI EFI_STUB EFI_PARTITION ACPI PCI PCI_HOST_GENERIC VIRTIO VIRTIO_BLK VIRTIO_PCI \
 	SERIAL_AMBA_PL011 SERIAL_AMBA_PL011_CONSOLE DEVTMPFS DEVTMPFS_MOUNT; do
-	rg -q "^CONFIG_${option}=y$" configs/kernel/linux-generic-arm64-lts.config \
+	rg -q "^CONFIG_${option}=y$" configs/kernel/linux-generic-arm64-qemu.config \
 		|| fail "generic arm64 kernel config is missing CONFIG_${option}=y"
 done
 
@@ -296,6 +338,7 @@ KERNEL_PACKAGE='linux-sbc-test-board'
 KERNEL_DEV_PACKAGE='linux-sbc-test-board-dev'
 KERNEL_DOC_PACKAGE='linux-sbc-test-board-doc'
 KERNEL_HEADERS_PACKAGE='linux-headers'
+KERNEL_GROUP='test-board'
 KERNEL_FLAVOR='sbc-test-board'
 KERNEL_PKGVER='6.12.1'
 KERNEL_PKGREL='0'
@@ -303,6 +346,7 @@ KERNEL_ABI_RELEASE='6.12.1-0-sbc-test-board'
 KERNEL_REPOSITORY='$manifest_test_dir/repository'
 KERNEL_PUBLIC_KEY='$manifest_test_dir/repository/alpine-sbc.rsa.pub'
 EOF
+kernel_group="test-board"
 load_kernel_package_manifest "$manifest_test_dir/kernel-packages.env" sbc-test-board
 [[ "$KERNEL_ABI_RELEASE" == 6.12.1-0-sbc-test-board ]] \
 	|| fail "kernel package manifest did not export the validated ABI release"

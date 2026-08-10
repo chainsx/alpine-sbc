@@ -34,11 +34,14 @@ override_url=""
 override_branch=""
 override_config=""
 kernel_flavor=""
+kernel_group=""
 kernel_pkgrel=""
 boot_mode=""
 initrd=""
 dtb_name=""
 serial_console=""
+serial_baud=""
+serial_getty=""
 
 while (($#)); do
 	case "$1" in
@@ -72,10 +75,9 @@ kernel_arch="${override_arch:-${arch:-}}"
 kernel_url="${override_url:-${kernel_url:-}}"
 kernel_branch="${override_branch:-${kernel_branch:-}}"
 kernel_config="${override_config:-${kernel_config:-}}"
-require_board_variables kernel_arch kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel \
+require_board_variables kernel_arch kernel_group kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel \
 	boot_mode initrd dtb_name
 
-serial_getty="${serial_getty:-yes}"
 if [[ "$serial_getty" == yes ]]; then
 	require_board_variables serial_console serial_baud
 fi
@@ -89,6 +91,13 @@ require_commands cmp git make gcc mawk openssl cpio find sha256sum sort
 
 kernel_src="$WORK_DIR/linux-src"
 kernel_build="$WORK_DIR/linux-build/$kernel_flavor"
+# Some vendor configurations enable SELinux's host-side header generator.  Its
+# upstream Makefile includes the source UAPI directory but not the generated
+# arch UAPI directory when building out of tree, so provide that path for all
+# kernel host tools.  This also keeps the fix local to the selected kernel
+# build and preserves any caller-supplied HOSTCFLAGS.
+kernel_host_cflags="${HOSTCFLAGS:-} -I$kernel_src/arch/$kernel_arch/include/uapi -I$kernel_build/arch/$kernel_arch/include/generated/uapi -I$kernel_src/arch/$kernel_arch/include -I$kernel_build/arch/$kernel_arch/include/generated"
+export HOSTCFLAGS="$kernel_host_cflags"
 package_stage="$WORK_DIR/kernel-pkg/kernel-bin"
 dev_stage="$WORK_DIR/kernel-pkg/kernel-dev-bin"
 doc_stage="$WORK_DIR/kernel-pkg/kernel-doc-bin"
@@ -100,9 +109,9 @@ source_state="$kernel_src/.alpine-sbc-source"
 
 patch_root="$PROJECT_ROOT/patches/kernel/$kernel_branch"
 patch_fingerprint="$(tree_fingerprint "$patch_root")"
-expected_state="url=$kernel_url
+expected_state="group=$kernel_group
+url=$kernel_url
 ref=$kernel_branch
-board=$board
 patches=$patch_fingerprint"
 
 fetch_kernel() {
@@ -144,6 +153,8 @@ apply_kernel_changes() {
 	copy_tree_contents "$patch_root/files" "$kernel_src"
 	apply_patch_directory "$patch_root/generic/patches"
 	copy_tree_contents "$patch_root/generic/files" "$kernel_src"
+	apply_patch_directory "$patch_root/$kernel_group/patches"
+	copy_tree_contents "$patch_root/$kernel_group/files" "$kernel_src"
 	apply_patch_directory "$patch_root/$board/patches"
 	copy_tree_contents "$patch_root/$board/files" "$kernel_src"
 	printf '%s\n' "$expected_state" > "$source_state"
@@ -157,17 +168,23 @@ configure_kernel() {
 	local config_fingerprint
 	config_fingerprint="$(sha256sum "$config_path" | awk '{print $1}')|signing=${KERNEL_SIGNING_KEY:-}"
 	local refresh_config=0
-	if [[ ! -f "$kernel_build/localversion-alpine" ]] \
-		|| [[ "$(cat "$kernel_build/localversion-alpine")" != "$expected_localversion" ]]; then
-		printf '%s\n' "$expected_localversion" > "$kernel_build/localversion-alpine"
-	fi
 	# Do not rewrite an unchanged configuration: kbuild treats its mtime as a
 	# dependency and would otherwise rebuild every object on each retry.  The
 	# state file records the source config rather than comparing against .config,
 	# because olddefconfig legitimately adds new kernel defaults.
 	if [[ ! -f "$config_state" ]] || [[ "$(cat "$config_state")" != "$config_fingerprint" ]]; then
-		cp "$config_path" "$kernel_build/.config"
 		refresh_config=1
+	fi
+	if (( refresh_config )); then
+		# A changed config can disable modules that are still present in the old
+		# output tree.  Reusing that tree would leak stale modules into the APK.
+		safe_remove_tree "$kernel_build"
+		mkdir -p "$kernel_build"
+		cp "$config_path" "$kernel_build/.config"
+	fi
+	if [[ ! -f "$kernel_build/localversion-alpine" ]] \
+		|| [[ "$(cat "$kernel_build/localversion-alpine")" != "$expected_localversion" ]]; then
+		printf '%s\n' "$expected_localversion" > "$kernel_build/localversion-alpine"
 	fi
 
 	# Git checkouts otherwise append a commit suffix when a vendor config enables
@@ -406,12 +423,12 @@ stage_kernel_doc_package() {
 write_metadata() {
 	local abi_release="$1"
 	cat > "$WORK_DIR/kernel-pkg/kernel.env" <<EOF
+KERNEL_GROUP='$kernel_group'
 KERNEL_FLAVOR='$kernel_flavor'
 KERNEL_PKGVER='$kernel_pkgver'
 KERNEL_PKGREL='$kernel_pkgrel'
 KERNEL_ABI_RELEASE='$abi_release'
 KERNEL_APK_ARCH='$(apk_arch_for_kernel_arch "$kernel_arch")'
-KERNEL_BOARD='$board'
 EOF
 }
 

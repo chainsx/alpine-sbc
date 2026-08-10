@@ -127,8 +127,30 @@ load_board_config() {
 	local config="$PROJECT_ROOT/boards/$requested_board.config"
 	[[ -f "$config" ]] || die "Board configuration not found: $config"
 	board="$requested_board"
+	# Clear board fields before loading another board in the same shell.  This
+	# prevents optional platform settings (for example rkbin) from leaking into
+	# the next configuration and makes the loader safe for discovery tools.
+	unset arch platform bootloader boot_mode bootargs bootloader_url bootloader_branch \
+		bootloader_config bootloader_patchdir atf_compile atf_url atf_branch atf_plat \
+		atf_extra_config rkbin rkbin_tpl_bin rkbin_tpl_revision amlogic_boot_fip \
+		stm32mp2_boot_fip optee_compile optee_url optee_branch optee_extra_config soc \
+		kernel_group kernel_flavor kernel_url kernel_branch kernel_config kernel_pkgrel \
+		dtb_name initrd rootfs_arch part_table boot_size eth_interface \
+		kernel_firmware_packages serial_console serial_baud serial_getty boot_timeout mdev_coldplug
 	# shellcheck disable=SC1090
 	source "$config"
+	[[ -n "${kernel_group:-}" ]] \
+		|| die "Board '$board' does not define kernel_group."
+	local kernel_group_config="$PROJECT_ROOT/configs/kernel/groups/$kernel_group.config"
+	[[ -f "$kernel_group_config" ]] \
+		|| die "Board '$board' references missing kernel group: $kernel_group_config"
+	# Group files own the source/configuration identity shared by all boards in
+	# the group.  A board file therefore only needs to select the group and DTB.
+	# shellcheck disable=SC1090
+	source "$kernel_group_config"
+	if [[ -n "${kernel_group:-}" && -z "${kernel_flavor:-}" ]]; then
+		kernel_flavor="$(derive_kernel_flavor "$kernel_group")"
+	fi
 	validate_board_config
 	log_info "Loaded board configuration: $board ($config)"
 }
@@ -147,8 +169,8 @@ validate_board_config() {
 	require_board_variables \
 		arch platform bootloader boot_mode bootargs \
 		bootloader_url bootloader_branch bootloader_config atf_compile \
-		kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel \
-		dtb_name initrd rootfs_arch part_table boot_size
+		kernel_group kernel_url kernel_branch kernel_config kernel_flavor kernel_pkgrel \
+		dtb_name initrd rootfs_arch part_table boot_size serial_getty mdev_coldplug
 
 	[[ "$(normalize_arch "$arch")" == arm64 ]] \
 		|| die "Board '$board' must use arch=arm64."
@@ -158,8 +180,16 @@ validate_board_config() {
 		|| die "Board '$board' selects unsupported bootloader '$bootloader'."
 	[[ -f "$PROJECT_ROOT/configs/kernel/$kernel_config" ]] \
 		|| die "Board '$board' references missing kernel config: $kernel_config"
+	[[ "$kernel_group" =~ ^[a-z0-9][a-z0-9-]*$ ]] \
+		|| die "Board '$board' has invalid kernel_group '$kernel_group'."
+	[[ "$kernel_flavor" == "$(derive_kernel_flavor "$kernel_group")" ]] \
+		|| die "Board '$board' kernel_flavor must be derived from kernel_group='$kernel_group'."
 	[[ "$kernel_pkgrel" =~ ^[0-9]+$ ]] \
 		|| die "Board '$board' has invalid kernel_pkgrel '$kernel_pkgrel'."
+	case "$mdev_coldplug" in
+		yes | no) ;;
+		*) die "Board '$board' has invalid mdev_coldplug='$mdev_coldplug'. Use yes or no." ;;
+	esac
 
 	case "$platform" in
 		qemu | efi-arm64 | rockchip64 | amlogic | stm32mp2 | allwinner | phytium) ;;
@@ -179,7 +209,6 @@ validate_board_config() {
 		|| die "Board '$board' has invalid boot_size '$boot_size'."
 	(( boot_size >= 64 )) \
 		|| die "Board '$board' boot_size must be at least 64 MiB."
-	serial_getty="${serial_getty:-yes}"
 	case "$serial_getty" in
 		yes)
 			require_board_variables serial_console serial_baud
@@ -201,6 +230,11 @@ validate_board_config() {
 			;;
 		*) die "Board '$board' has invalid serial_getty='$serial_getty'. Use yes or no." ;;
 	esac
+	if [[ "$boot_mode" == extlinux ]]; then
+		require_board_variables boot_timeout
+		[[ "$boot_timeout" =~ ^[1-9][0-9]*$ ]] \
+			|| die "Board '$board' has invalid boot_timeout '$boot_timeout'."
+	fi
 	[[ " $bootargs " == *' root=LABEL=rootfs '* ]] \
 		|| die "Board '$board' bootargs must select root=LABEL=rootfs."
 
@@ -291,6 +325,7 @@ load_kernel_package_manifest() {
 	KERNEL_ABI_RELEASE=""
 	KERNEL_REPOSITORY=""
 	KERNEL_PUBLIC_KEY=""
+	KERNEL_GROUP=""
 	# This file is generated locally by kernel-pkg.sh and contains only quoted
 	# scalar assignments.
 	# shellcheck disable=SC1090
@@ -298,13 +333,17 @@ load_kernel_package_manifest() {
 
 	for variable in KERNEL_PACKAGE KERNEL_DEV_PACKAGE KERNEL_DOC_PACKAGE \
 		KERNEL_HEADERS_PACKAGE \
-		KERNEL_FLAVOR KERNEL_PKGVER KERNEL_PKGREL KERNEL_ABI_RELEASE \
+		KERNEL_GROUP KERNEL_FLAVOR KERNEL_PKGVER KERNEL_PKGREL KERNEL_ABI_RELEASE \
 		KERNEL_REPOSITORY KERNEL_PUBLIC_KEY; do
 		[[ -n "${!variable:-}" ]] \
 			|| die "Kernel package manifest does not define $variable: $manifest"
 	done
 	[[ -z "$expected_flavor" || "$KERNEL_FLAVOR" == "$expected_flavor" ]] \
 		|| die "Kernel packages for '$KERNEL_FLAVOR' do not match '$expected_flavor'."
+	[[ "$KERNEL_FLAVOR" == "$(derive_kernel_flavor "$KERNEL_GROUP")" ]] \
+		|| die "Kernel package flavor is inconsistent with KERNEL_GROUP='$KERNEL_GROUP'."
+	[[ -z "${kernel_group:-}" || "$KERNEL_GROUP" == "$kernel_group" ]] \
+		|| die "Kernel packages belong to group '$KERNEL_GROUP', not '$kernel_group'."
 	[[ "$KERNEL_PACKAGE" == "linux-$KERNEL_FLAVOR" \
 		&& "$KERNEL_DEV_PACKAGE" == "linux-$KERNEL_FLAVOR-dev" \
 		&& "$KERNEL_DOC_PACKAGE" == "linux-$KERNEL_FLAVOR-doc" \

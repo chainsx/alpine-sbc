@@ -72,7 +72,7 @@ done
 require_root
 require_alpine_arm64_host
 load_board_config "$board"
-require_board_variables arch rootfs_arch kernel_url kernel_branch kernel_config \
+require_board_variables arch rootfs_arch kernel_group kernel_url kernel_branch kernel_config \
 	bootloader_url bootloader_branch bootloader_config platform boot_mode part_table boot_size
 
 [[ "$(normalize_arch "$arch")" == arm64 ]] || die "Only arm64 target kernels are supported."
